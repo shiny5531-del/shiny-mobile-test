@@ -1,0 +1,35 @@
+{
+  "document_type": "ai_project_release_manifest",
+  "project_id": "shiny_mobile_test",
+  "project_name": "Shiny Mobile Test",
+  "project_type": "mobile",
+  "repository": "https://github.com/shiny5531-del/shiny-mobile-test",
+  "visibility": "public-test",
+  "version": "v0.1.1-test",
+  "flutter_version": "0.1.1+2",
+  "package_id": "com.increate.shiny_mobile_test",
+  "app_display_name": "Shiny Mobile Test",
+  "artifact": {
+    "apk_name": "Shiny_Mobile_Test_v0.1.1-test.apk",
+    "artifact_name": "Shiny-Mobile-Test-v0.1.1-test",
+    "workflow": ".github/workflows/build-apk.yml",
+    "latest_successful_run": "https://github.com/shiny5531-del/shiny-mobile-test/actions/runs/32705628643"
+  },
+  "build_policy": {
+    "build_type": "debug",
+    "build_location": "GitHub Actions",
+    "requires_local_android_toolchain": false,
+    "global_pc_install_required": false
+  },
+  "security": {
+    "public_repository_warning": "Do not commit secrets, API keys, passwords, signing keys, .jks, .keystore, or key.properties.",
+    "fixed_debug_signing_secret": "ANDROID_DEBUG_KEYSTORE_BASE64",
+    "fixed_debug_signing_status": "optional_not_configured_in_repo"
+  },
+  "status": {
+    "state": "test_build_success",
+    "last_updated_at": "2026-08-24T17:23:38+09:00",
+    "next_version": "v0.1.2-test",
+    "next_action": "Configure fixed debug signing when keytool or a signing key is available, then start feature development."
+  }
+}

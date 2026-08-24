@@ -10,6 +10,7 @@ android/.gradle/
 android/local.properties
 
 .github/test-signing/
+tools/signing/
 *.jks
 *.keystore
 key.properties
