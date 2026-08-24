@@ -8,6 +8,7 @@ void main() {
   ) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(const ShinyMobileTestApp());
+    await tester.pumpAndSettle();
 
     expect(find.text('파크골프 스코어카드'), findsWidgets);
     expect(find.text('경기 설정'), findsOneWidget);
