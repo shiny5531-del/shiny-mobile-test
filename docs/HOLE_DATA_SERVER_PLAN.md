@@ -73,6 +73,31 @@ created_at
 - Upload only hole facts, not the scorecard.
 - Allow registering a missing course with name and address.
 
+## Prototype API
+
+The repository includes a small Node.js prototype server at:
+
+```text
+server/hole_data_api.js
+```
+
+Endpoints:
+
+```text
+GET /health
+GET /hole-facts?courseId=csv-1
+POST /contributions
+POST /courses
+```
+
+Runtime data is stored in:
+
+```text
+server/data/hole-data.json
+```
+
+This runtime JSON file is ignored by Git and should not be committed.
+
 ## Map Strategy
 
 - Bundled CSV can be used immediately for search and selection.

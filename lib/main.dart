@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData, rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -9,7 +9,7 @@ void main() {
   runApp(const ShinyMobileTestApp());
 }
 
-const String appVersion = 'v0.1.4-test';
+const String appVersion = 'v0.1.5-test';
 const String draftStorageKey = 'park_golf_scorecard_draft_v1';
 const String customCoursesStorageKey = 'park_golf_custom_courses_v1';
 const String courseCsvAssetPath = 'assets/data/park_golf_courses_kr.csv';
@@ -423,6 +423,69 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
+  List<Map<String, dynamic>> _holeFactsForSharing() {
+    final course = _selectedGolfCourse;
+    if (course == null) return [];
+
+    return [
+      for (final hole in _holes)
+        if (hole.distanceController.text.trim().isNotEmpty)
+          {
+            'courseId': course.id,
+            'courseName': course.name,
+            'courseCode': hole.course,
+            'holeNo': hole.hole,
+            'distanceM': _readNumber(hole.distanceController),
+            'par': hole.par,
+          },
+    ];
+  }
+
+  Future<void> _showContributionPreview() async {
+    final facts = _holeFactsForSharing();
+    if (facts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('공유할 거리 정보가 아직 없습니다')),
+      );
+      return;
+    }
+
+    final payload = const JsonEncoder.withIndent('  ').convert({
+      'type': 'hole_fact_contribution',
+      'version': 1,
+      'facts': facts,
+    });
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('공유 데이터 미리보기'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(payload),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('닫기'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: payload));
+              Navigator.of(context).pop();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('공유 후보 데이터를 복사했습니다')),
+              );
+            },
+            child: const Text('복사'),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _playerName(int index) {
     final name = _playerControllers[index].text.trim();
     return name.isEmpty ? 'P${index + 1}' : name;
@@ -563,11 +626,50 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
           children: [
+            _buildContributionPanel(),
+            const SizedBox(height: 8),
             _buildScoreCards(),
             const SizedBox(height: 12),
             _buildTotals(),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildContributionPanel() {
+    final facts = _holeFactsForSharing();
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF7F3),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFD5E6DC)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_upload_outlined, color: Color(0xFF16866A)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '홀 정보 공유 후보',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                Text(
+                  '거리 입력 ${facts.length}개 · 개인 타수는 제외',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _showContributionPreview,
+            child: const Text('보기'),
+          ),
+        ],
       ),
     );
   }

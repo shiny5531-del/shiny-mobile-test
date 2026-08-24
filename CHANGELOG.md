@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.5-test - 2026-08-24
+
+- Added a scorecard panel that previews shareable hole distance/par facts.
+- Added a text-only prototype API for hole fact contributions.
+- Added server-side aggregation using median distance and most common par.
+- Ignored runtime server JSON data so real user data is not committed.
+
 ## v0.1.4-test - 2026-08-24
 
 - Added the Korean park golf course CSV as a bundled app asset.
