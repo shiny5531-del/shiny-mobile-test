@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.7-test - 2026-08-24
+
+- Removed course editing from active hole rows.
+- Updated the active score header to include the total par summary.
+- Changed overall totals from chips into a compact two-column list.
+- Changed current course totals into one player per line with eagle/birdie highlights.
+- Added current course par and total distance text.
+
 ## v0.1.6-test - 2026-08-24
 
 - Changed active score input to show one 9-hole course at a time.

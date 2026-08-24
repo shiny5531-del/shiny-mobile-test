@@ -9,7 +9,7 @@ void main() {
   runApp(const ShinyMobileTestApp());
 }
 
-const String appVersion = 'v0.1.6-test';
+const String appVersion = 'v0.1.7-test';
 const String draftStorageKey = 'park_golf_scorecard_draft_v1';
 const String customCoursesStorageKey = 'park_golf_custom_courses_v1';
 const String savedRoundsStorageKey = 'park_golf_saved_rounds_v1';
@@ -493,6 +493,46 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
+  int _distanceTotal(Iterable<int> indexes) {
+    return indexes.fold(
+      0,
+      (sum, index) => sum + _readNumber(_holes[index].distanceController),
+    );
+  }
+
+  Map<String, int> _scoreHighlights(int playerIndex, Iterable<int> indexes) {
+    var eagleOrBetter = 0;
+    var birdie = 0;
+    for (final index in indexes) {
+      final score = _readNumber(_holes[index].scoreControllers[playerIndex]);
+      if (score == 0) continue;
+      final diff = score - _holes[index].par;
+      if (diff <= -2) {
+        eagleOrBetter++;
+      } else if (diff == -1) {
+        birdie++;
+      }
+    }
+    return {'eagleOrBetter': eagleOrBetter, 'birdie': birdie};
+  }
+
+  String _playerSummaryLine(
+    int playerIndex, {
+    required Iterable<int> indexes,
+    required int total,
+  }) {
+    final highlights = _scoreHighlights(playerIndex, indexes);
+    final parts = <String>[];
+    if (highlights['eagleOrBetter']! > 0) {
+      parts.add('이글 이상 ${highlights['eagleOrBetter']}');
+    }
+    if (highlights['birdie']! > 0) {
+      parts.add('버디 ${highlights['birdie']}');
+    }
+    final suffix = parts.isEmpty ? '' : ' - ${parts.join(' / ')}';
+    return '${_playerName(playerIndex)} : $total$suffix';
+  }
+
   void _showCourseSlot(int slot) {
     setState(() {
       _activeCourseSlot = slot;
@@ -579,7 +619,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   String _courseSummary() {
     final first = _holes.first;
     final last = _holes.last;
-    return '${first.course} ${first.hole}홀 - ${last.course} ${last.hole}홀';
+    return '${first.course} ${first.hole}홀 - ${last.course} ${last.hole}홀 · 합계 ${_parTotal()}홀';
   }
 
   void _setDefaultCoursePair(String first, String second) {
@@ -718,6 +758,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             const SizedBox(height: 8),
             _buildContributionPanel(),
             const SizedBox(height: 8),
+            _buildCourseStatsLine(),
             _buildScoreCards(),
             const SizedBox(height: 12),
             _buildTotals(currentOnly: true),
@@ -730,8 +771,9 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   Widget _buildOverallSummary() {
+    final indexes = Iterable<int>.generate(_holes.length);
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: const Color(0xFF173F35),
         borderRadius: BorderRadius.circular(8),
@@ -743,17 +785,47 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             'A+B 코스 합계',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          const SizedBox(height: 6),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            childAspectRatio: 4.4,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 4,
             children: [
-              _totalChip('파', _parTotal().toString()),
               for (var index = 0; index < _playerCount; index++)
-                _totalChip(_playerName(index), _scoreTotal(index).toString()),
+                _summaryMiniLine(
+                  _playerName(index),
+                  _scoreTotal(index),
+                  indexes,
+                  index,
+                ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _summaryMiniLine(
+    String name,
+    int total,
+    Iterable<int> indexes,
+    int playerIndex,
+  ) {
+    final highlights = _scoreHighlights(playerIndex, indexes);
+    final text = highlights['eagleOrBetter']! > 0 || highlights['birdie']! > 0
+        ? '$name $total · E${highlights['eagleOrBetter']} B${highlights['birdie']}'
+        : '$name $total';
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
       ),
     );
   }
@@ -1022,7 +1094,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             child: Row(
               children: [
                 Expanded(
-                  child: _buildHolePicker(index, info),
+                  child: _buildHoleLabel(index, info),
                 ),
                 const SizedBox(width: 8),
                 _compactNumberField(hole.distanceController, '거리', 'm'),
@@ -1047,61 +1119,31 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
-  Widget _buildHolePicker(int index, CourseInfo info) {
+  Widget _buildHoleLabel(int index, CourseInfo info) {
     final hole = _holes[index];
-    final foreground = info.textColor;
+    return Text(
+      '${hole.course}코스 ${hole.hole}홀',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: info.textColor,
+        fontSize: 17,
+        fontWeight: FontWeight.w900,
+      ),
+    );
+  }
 
-    return Row(
-      children: [
-        DropdownButton<String>(
-          value: hole.course,
-          dropdownColor: Colors.white,
-          underline: const SizedBox.shrink(),
-          style: TextStyle(color: foreground, fontWeight: FontWeight.w800),
-          iconEnabledColor: foreground,
-          items: [
-            for (final course in courses)
-              DropdownMenuItem(
-                value: course.name,
-                child: Text(
-                  course.label,
-                  style: TextStyle(
-                    color: course.textColor == Colors.white
-                        ? course.color
-                        : const Color(0xFF2D2D2D),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-          ],
-          onChanged: (value) {
-            if (value == null) return;
-            setState(() {
-              hole.course = value;
-            });
-            _saveDraft();
-          },
+  Widget _buildCourseStatsLine() {
+    final indexes = _currentCourseIndexes();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        '${_slotCourseName(_activeCourseSlot)}코스 파 ${_currentParTotal()} / 총 전장: ${_distanceTotal(indexes)}m',
+        style: const TextStyle(
+          color: Color(0xFF173F35),
+          fontWeight: FontWeight.w800,
         ),
-        const SizedBox(width: 6),
-        DropdownButton<int>(
-          value: hole.hole,
-          underline: const SizedBox.shrink(),
-          style: TextStyle(color: foreground, fontWeight: FontWeight.w800),
-          iconEnabledColor: foreground,
-          items: [
-            for (var number = 1; number <= 9; number++)
-              DropdownMenuItem(value: number, child: Text('$number홀')),
-          ],
-          onChanged: (value) {
-            if (value == null) return;
-            setState(() {
-              hole.hole = value;
-              hole.par = defaultPars[value - 1];
-            });
-            _saveDraft();
-          },
-        ),
-      ],
+      ),
     );
   }
 
@@ -1204,6 +1246,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   Widget _buildTotals({required bool currentOnly}) {
+    final indexes = _currentCourseIndexes();
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1222,16 +1265,22 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
               fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _totalChip('파', _currentParTotal().toString()),
-              for (var index = 0; index < _playerCount; index++)
-                _totalChip(_playerName(index), _currentScoreTotal(index).toString()),
-            ],
-          ),
+          const SizedBox(height: 6),
+          for (var index = 0; index < _playerCount; index++) ...[
+            Text(
+              _playerSummaryLine(
+                index,
+                indexes: indexes,
+                total: _currentScoreTotal(index),
+              ),
+              style: const TextStyle(
+                color: Color(0xFF173F35),
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (index < _playerCount - 1) const SizedBox(height: 4),
+          ],
         ],
       ),
     );
