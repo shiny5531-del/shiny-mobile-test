@@ -1499,13 +1499,6 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
-  Widget _totalChip(String label, String value) {
-    return Chip(
-      backgroundColor: Colors.white,
-      label: Text('$label $value'),
-      labelStyle: const TextStyle(fontWeight: FontWeight.w800),
-    );
-  }
 }
 
 class GolfCoursePickerPage extends StatefulWidget {
