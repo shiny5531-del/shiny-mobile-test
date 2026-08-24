@@ -5,13 +5,13 @@
   "project_type": "mobile",
   "repository": "https://github.com/shiny5531-del/shiny-mobile-test",
   "visibility": "public-test",
-  "version": "v0.1.5-test",
-  "flutter_version": "0.1.5+6",
+  "version": "v0.1.6-test",
+  "flutter_version": "0.1.6+7",
   "package_id": "com.increate.shiny_mobile_test",
   "app_display_name": "파크골프 스코어카드",
   "artifact": {
-    "apk_name": "Shiny_Mobile_Test_v0.1.5-test.apk",
-    "artifact_name": "Shiny-Mobile-Test-v0.1.5-test",
+    "apk_name": "Shiny_Mobile_Test_v0.1.6-test.apk",
+    "artifact_name": "Shiny-Mobile-Test-v0.1.6-test",
     "workflow": ".github/workflows/build-apk.yml",
     "latest_successful_run": "https://github.com/shiny5531-del/shiny-mobile-test/actions/runs/32709974331"
   },
@@ -27,9 +27,9 @@
     "fixed_debug_signing_status": "optional_fallback_verified_invalid_secret_does_not_block_build"
   },
   "status": {
-    "state": "park_golf_hole_data_api_development",
-    "last_updated_at": "2026-08-24T19:05:00+09:00",
-    "next_version": "v0.1.6-test",
-    "next_action": "Connect the Flutter app to a hosted hole data API after choosing the hosting target."
+    "state": "park_golf_course_focused_scorecard_development",
+    "last_updated_at": "2026-08-24T20:35:00+09:00",
+    "next_version": "v0.1.7-test",
+    "next_action": "Update the interactive HTML preview and run validation before the next APK build."
   }
 }

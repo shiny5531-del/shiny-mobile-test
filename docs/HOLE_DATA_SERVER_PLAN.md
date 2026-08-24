@@ -9,8 +9,9 @@ Collect only shared course facts from users:
 - Hole number
 - Distance in meters
 - Par
+- Anonymous per-hole score samples
 
-Do not collect personal scorecards for the shared dataset.
+Do not collect player names or full personal scorecards for the shared dataset.
 
 ## Minimal Data Model
 
@@ -39,6 +40,9 @@ course_code
 hole_no
 distance_m
 par
+average_score
+difficulty_over_par
+score_sample_count
 confidence
 sample_count
 updated_at
@@ -53,6 +57,7 @@ course_code
 hole_no
 distance_m
 par
+anonymous_scores
 client_id_hash
 created_at
 ```
@@ -61,16 +66,18 @@ created_at
 
 - Use the median distance as the displayed distance.
 - Use the most common par value as the displayed par.
+- Use anonymous score samples to calculate average score.
+- Use average score minus par as a simple hole difficulty score.
 - Increase confidence after repeated matching contributions.
 - Keep raw contribution rows text-only and numeric-only.
-- Do not upload player names, personal scores, photos, or location traces.
+- Do not upload player names, photos, location traces, or full personal scorecards.
 
 ## App Behavior
 
 - If a course has trusted hole data, prefill distance and par.
 - If a course has no trusted hole data, let the user type distance and par.
 - Ask before uploading first contribution.
-- Upload only hole facts, not the scorecard.
+- Upload hole facts and anonymous per-hole score samples.
 - Allow registering a missing course with name and address.
 
 ## Prototype API

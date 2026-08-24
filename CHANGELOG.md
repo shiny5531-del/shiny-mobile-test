@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.6-test - 2026-08-24
+
+- Changed active score input to show one 9-hole course at a time.
+- Added A/B course switching and next-course guidance.
+- Added overall A+B totals plus current course totals.
+- Added saved round history stored on the device.
+- Added anonymous hole score samples to shared data previews and API aggregation.
+
 ## v0.1.5-test - 2026-08-24
 
 - Added a scorecard panel that previews shareable hole distance/par facts.

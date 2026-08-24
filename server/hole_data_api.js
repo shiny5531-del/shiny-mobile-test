@@ -85,6 +85,13 @@ function aggregateFacts(contributions) {
     const par = Number(
       Object.entries(parCounts).sort((a, b) => b[1] - a[1])[0][0],
     );
+    const scoreSamples = rows.flatMap((row) => row.anonymousScores || []);
+    const averageScore = scoreSamples.length
+      ? Math.round((scoreSamples.reduce((sum, score) => sum + score, 0) / scoreSamples.length) * 10) / 10
+      : null;
+    const difficultyOverPar = averageScore == null
+      ? null
+      : Math.round((averageScore - par) * 10) / 10;
 
     return {
       courseId,
@@ -92,6 +99,9 @@ function aggregateFacts(contributions) {
       holeNo: Number(holeNoText),
       distanceM,
       par,
+      averageScore,
+      difficultyOverPar,
+      scoreSampleCount: scoreSamples.length,
       sampleCount: rows.length,
       confidence: rows.length >= 5 ? 'trusted' : 'draft',
       updatedAt: new Date().toISOString(),
@@ -107,6 +117,11 @@ function validateContribution(body) {
     const holeNo = normalizeInt(item.holeNo, 1, 9);
     const distanceM = normalizeInt(item.distanceM, 1, 300);
     const par = normalizeInt(item.par, 3, 5);
+    const anonymousScores = Array.isArray(item.anonymousScores)
+      ? item.anonymousScores
+        .map((score) => normalizeInt(score, 1, 20))
+        .filter((score) => score != null)
+      : [];
     if (!courseId || !['A', 'B', 'C', 'D'].includes(courseCode)) return null;
     if (holeNo == null || distanceM == null || par == null) return null;
     return {
@@ -115,6 +130,7 @@ function validateContribution(body) {
       holeNo,
       distanceM,
       par,
+      anonymousScores,
       clientIdHash: String(body.clientIdHash || 'anonymous').slice(0, 80),
       createdAt: new Date().toISOString(),
     };

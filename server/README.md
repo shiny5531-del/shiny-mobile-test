@@ -9,8 +9,9 @@ It stores:
 - hole number
 - distance in meters
 - par
+- anonymous per-hole score samples
 
-It does not store player names or personal scores.
+It does not store player names or full personal scorecards.
 
 ## Run
 
@@ -44,7 +45,8 @@ POST /courses
       "courseCode": "A",
       "holeNo": 1,
       "distanceM": 54,
-      "par": 3
+      "par": 3,
+      "anonymousScores": [3, 4, 3, 5]
     }
   ]
 }

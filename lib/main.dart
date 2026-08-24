@@ -9,9 +9,10 @@ void main() {
   runApp(const ShinyMobileTestApp());
 }
 
-const String appVersion = 'v0.1.5-test';
+const String appVersion = 'v0.1.6-test';
 const String draftStorageKey = 'park_golf_scorecard_draft_v1';
 const String customCoursesStorageKey = 'park_golf_custom_courses_v1';
+const String savedRoundsStorageKey = 'park_golf_saved_rounds_v1';
 const String courseCsvAssetPath = 'assets/data/park_golf_courses_kr.csv';
 
 class ShinyMobileTestApp extends StatelessWidget {
@@ -162,6 +163,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   ParkGolfCourse? _selectedGolfCourse;
   String? _draftSelectedCourseId;
   int _playerCount = 4;
+  int _activeCourseSlot = 0;
   bool _gameStarted = false;
   bool _savedOnce = false;
   bool _coursesLoaded = false;
@@ -283,6 +285,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       _placeController.text = data['place'] as String? ?? '';
       _dateController.text = data['date'] as String? ?? _dateController.text;
       _draftSelectedCourseId = data['selectedCourseId'] as String?;
+      _activeCourseSlot = data['activeCourseSlot'] as int? ?? 0;
       _playerCount = data['playerCount'] as int? ?? 4;
       final players = data['players'] as List<dynamic>? ?? [];
       for (var index = 0; index < _playerControllers.length; index++) {
@@ -312,6 +315,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       'place': _placeController.text,
       'date': _dateController.text,
       'selectedCourseId': _selectedGolfCourse?.id,
+      'activeCourseSlot': _activeCourseSlot,
       'playerCount': _playerCount,
       'players': _playerControllers.map((controller) => controller.text).toList(),
       'holes': _holes.map((hole) => hole.toJson()).toList(),
@@ -326,9 +330,54 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     });
     if (showMessage) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('이 기기에 저장했습니다')),
+        const SnackBar(content: Text('현재 경기를 자동 저장했습니다')),
       );
     }
+  }
+
+  Map<String, dynamic> _roundSnapshot() {
+    return {
+      'id': 'round-${DateTime.now().millisecondsSinceEpoch}',
+      'place': _placeController.text,
+      'date': _dateController.text,
+      'courseName': _selectedGolfCourse?.name,
+      'courseId': _selectedGolfCourse?.id,
+      'playerCount': _playerCount,
+      'players': _playerControllers.map((controller) => controller.text).toList(),
+      'holes': _holes.map((hole) => hole.toJson()).toList(),
+      'totalPar': _parTotal(),
+      'totals': [
+        for (var index = 0; index < _playerCount; index++) _scoreTotal(index),
+      ],
+      'savedAt': DateTime.now().toIso8601String(),
+    };
+  }
+
+  Future<void> _saveRoundRecord() async {
+    await _saveDraft();
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(savedRoundsStorageKey);
+    final rounds = raw == null ? <dynamic>[] : jsonDecode(raw) as List<dynamic>;
+    rounds.insert(0, _roundSnapshot());
+    await prefs.setString(savedRoundsStorageKey, jsonEncode(rounds.take(50).toList()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('저장 기록에 남겼습니다')),
+    );
+  }
+
+  Future<void> _openSavedRounds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(savedRoundsStorageKey);
+    final rounds = raw == null ? <dynamic>[] : jsonDecode(raw) as List<dynamic>;
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => SavedRoundsPage(
+          rounds: rounds.whereType<Map<String, dynamic>>().toList(),
+        ),
+      ),
+    );
   }
 
   List<ParkGolfCourse> _allGolfCourses() {
@@ -423,6 +472,34 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
+  Iterable<int> _currentCourseIndexes() {
+    final start = _activeCourseSlot == 0 ? 0 : 9;
+    return Iterable<int>.generate(9, (index) => start + index);
+  }
+
+  String _slotCourseName(int slot) {
+    final index = slot == 0 ? 0 : 9;
+    return _holes[index].course;
+  }
+
+  int _currentParTotal() {
+    return _currentCourseIndexes().fold(0, (sum, index) => sum + _holes[index].par);
+  }
+
+  int _currentScoreTotal(int playerIndex) {
+    return _currentCourseIndexes().fold(
+      0,
+      (sum, index) => sum + _readNumber(_holes[index].scoreControllers[playerIndex]),
+    );
+  }
+
+  void _showCourseSlot(int slot) {
+    setState(() {
+      _activeCourseSlot = slot;
+    });
+    _saveDraft();
+  }
+
   List<Map<String, dynamic>> _holeFactsForSharing() {
     final course = _selectedGolfCourse;
     if (course == null) return [];
@@ -437,6 +514,10 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             'holeNo': hole.hole,
             'distanceM': _readNumber(hole.distanceController),
             'par': hole.par,
+            'anonymousScores': [
+              for (final controller in hole.scoreControllers)
+                if (controller.text.trim().isNotEmpty) _readNumber(controller),
+            ],
           },
     ];
   }
@@ -616,8 +697,13 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             icon: const Icon(Icons.tune),
           ),
           IconButton(
-            tooltip: '저장',
-            onPressed: () => _saveDraft(showMessage: true),
+            tooltip: '저장 기록',
+            onPressed: _openSavedRounds,
+            icon: const Icon(Icons.history),
+          ),
+          IconButton(
+            tooltip: '기록 저장',
+            onPressed: _saveRoundRecord,
             icon: const Icon(Icons.save_outlined),
           ),
         ],
@@ -626,14 +712,75 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
           children: [
+            _buildOverallSummary(),
+            const SizedBox(height: 8),
+            _buildCourseSwitcher(),
+            const SizedBox(height: 8),
             _buildContributionPanel(),
             const SizedBox(height: 8),
             _buildScoreCards(),
             const SizedBox(height: 12),
-            _buildTotals(),
+            _buildTotals(currentOnly: true),
+            const SizedBox(height: 8),
+            _buildNextCourseButton(),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildOverallSummary() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF173F35),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'A+B 코스 합계',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _totalChip('파', _parTotal().toString()),
+              for (var index = 0; index < _playerCount; index++)
+                _totalChip(_playerName(index), _scoreTotal(index).toString()),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCourseSwitcher() {
+    return Row(
+      children: [
+        Expanded(
+          child: FilledButton.tonal(
+            onPressed: () => _showCourseSlot(0),
+            style: FilledButton.styleFrom(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text('${_slotCourseName(0)}코스 보기'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: FilledButton.tonal(
+            onPressed: () => _showCourseSlot(1),
+            style: FilledButton.styleFrom(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text('${_slotCourseName(1)}코스 보기'),
+          ),
+        ),
+      ],
     );
   }
 
@@ -845,7 +992,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   Widget _buildScoreCards() {
     return Column(
       children: [
-        for (var index = 0; index < _holes.length; index++) ...[
+        for (final index in _currentCourseIndexes()) ...[
           _buildHoleCard(index),
           const SizedBox(height: 8),
         ],
@@ -1035,20 +1182,42 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
-  Widget _buildTotals() {
+  Widget _buildNextCourseButton() {
+    if (_activeCourseSlot == 0) {
+      return FilledButton(
+        onPressed: () => _showCourseSlot(1),
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(48),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        child: Text('${_slotCourseName(1)}코스로 이동'),
+      );
+    }
+    return OutlinedButton(
+      onPressed: () => _showCourseSlot(0),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      child: Text('${_slotCourseName(0)}코스 다시 보기'),
+    );
+  }
+
+  Widget _buildTotals({required bool currentOnly}) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF173F35),
+        color: currentOnly ? Colors.white : const Color(0xFF173F35),
         borderRadius: BorderRadius.circular(8),
+        border: currentOnly ? Border.all(color: const Color(0xFFDCE6D9)) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            '합계',
+          Text(
+            '${_slotCourseName(_activeCourseSlot)}코스 현재 합계',
             style: TextStyle(
-              color: Colors.white,
+              color: currentOnly ? const Color(0xFF173F35) : Colors.white,
               fontSize: 18,
               fontWeight: FontWeight.w800,
             ),
@@ -1058,9 +1227,9 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _totalChip('파', _parTotal().toString()),
+              _totalChip('파', _currentParTotal().toString()),
               for (var index = 0; index < _playerCount; index++)
-                _totalChip(_playerName(index), _scoreTotal(index).toString()),
+                _totalChip(_playerName(index), _currentScoreTotal(index).toString()),
             ],
           ),
         ],
@@ -1091,6 +1260,85 @@ class GolfCoursePickerPage extends StatefulWidget {
 
   @override
   State<GolfCoursePickerPage> createState() => _GolfCoursePickerPageState();
+}
+
+class SavedRoundsPage extends StatelessWidget {
+  const SavedRoundsPage({
+    super.key,
+    required this.rounds,
+  });
+
+  final List<Map<String, dynamic>> rounds;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('저장된 기록')),
+      body: SafeArea(
+        child: rounds.isEmpty
+            ? const Center(child: Text('저장된 기록이 없습니다'))
+            : ListView.separated(
+                padding: const EdgeInsets.all(12),
+                itemCount: rounds.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final round = rounds[index];
+                  final players = (round['players'] as List<dynamic>? ?? [])
+                      .map((item) => item.toString())
+                      .toList();
+                  final totals = (round['totals'] as List<dynamic>? ?? [])
+                      .map((item) => item.toString())
+                      .toList();
+                  final courseName = round['courseName'] as String?;
+                  final place = round['place'] as String?;
+                  final displayName = (courseName?.trim().isNotEmpty ?? false)
+                      ? courseName!
+                      : (place?.trim().isNotEmpty ?? false)
+                          ? place!
+                          : '경기장 미입력';
+
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFDCE6D9)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          displayName,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          round['date'] as String? ?? '',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            Chip(label: Text('파 ${round['totalPar'] ?? 0}')),
+                            for (var player = 0;
+                                player < players.length && player < totals.length;
+                                player++)
+                              Chip(label: Text('${players[player]} ${totals[player]}')),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+      ),
+    );
+  }
 }
 
 class _GolfCoursePickerPageState extends State<GolfCoursePickerPage> {
