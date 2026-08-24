@@ -227,7 +227,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         DropdownButtonFormField<int>(
-          value: _playerCount,
+          initialValue: _playerCount,
           decoration: const InputDecoration(
             labelText: '플레이어 수',
             border: OutlineInputBorder(),
