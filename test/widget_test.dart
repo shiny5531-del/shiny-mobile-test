@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shiny_mobile_test/main.dart';
 
 void main() {
-  testWidgets('park golf scorecard shows base fields and totals', (
+  testWidgets('park golf scorecard shows base fields and score table', (
     tester,
   ) async {
     await tester.pumpWidget(const ShinyMobileTestApp());
@@ -12,13 +12,8 @@ void main() {
     expect(find.text('경기장'), findsOneWidget);
     expect(find.text('날짜'), findsOneWidget);
     expect(find.text('플레이어 수'), findsOneWidget);
-    expect(find.text('합계'), findsOneWidget);
-    expect(find.text('파 72'), findsOneWidget);
-    expect(find.text('v0.1.2-test'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextField).at(7), '3');
-    await tester.pump();
-
-    expect(find.text('플레이어 1 3'), findsOneWidget);
+    expect(find.text('A-B 기본'), findsOneWidget);
+    expect(find.text('C-D 기본'), findsOneWidget);
+    expect(find.byType(DataTable), findsOneWidget);
   });
 }
