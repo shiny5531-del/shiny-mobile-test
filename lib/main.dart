@@ -13,6 +13,7 @@ class ShinyMobileTestApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Shiny Mobile Test',
       theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
       ),
       home: const HomePage(),
@@ -61,7 +62,6 @@ class _HomePageState extends State<HomePage> {
                   size: 80,
                 ),
                 const SizedBox(height: 24),
-
                 const Text(
                   '모바일 앱 테스트',
                   style: TextStyle(
@@ -70,17 +70,13 @@ class _HomePageState extends State<HomePage> {
                   ),
                   textAlign: TextAlign.center,
                 ),
-
                 const SizedBox(height: 12),
-
                 const Text(
-                  '일반 Chat + GitHub 원격 빌드',
+                  'Public GitHub + Actions 원격 빌드',
                   style: TextStyle(fontSize: 16),
                   textAlign: TextAlign.center,
                 ),
-
                 const SizedBox(height: 40),
-
                 Text(
                   '$_count',
                   style: const TextStyle(
@@ -88,16 +84,12 @@ class _HomePageState extends State<HomePage> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-
                 const SizedBox(height: 8),
-
                 const Text(
                   '버튼 클릭 횟수',
                   style: TextStyle(fontSize: 16),
                 ),
-
                 const SizedBox(height: 32),
-
                 SizedBox(
                   width: 240,
                   height: 56,
@@ -110,9 +102,7 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 12),
-
                 SizedBox(
                   width: 240,
                   height: 50,
@@ -122,14 +112,10 @@ class _HomePageState extends State<HomePage> {
                     label: const Text('초기화'),
                   ),
                 ),
-
                 const SizedBox(height: 48),
-
                 const Text(
                   'v0.1.1-test',
-                  style: TextStyle(
-                    fontSize: 13,
-                  ),
+                  style: TextStyle(fontSize: 13),
                 ),
               ],
             ),

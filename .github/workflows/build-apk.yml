@@ -2,6 +2,12 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -26,7 +32,7 @@ jobs:
       - name: Show Flutter version
         run: flutter --version
 
-      - name: Create Flutter platform files
+      - name: Create Flutter Android files
         run: |
           flutter create \
             --project-name shiny_mobile_test \
@@ -38,14 +44,6 @@ jobs:
         run: |
           sed -i 's/android:label="shiny_mobile_test"/android:label="Shiny Mobile Test"/' \
             android/app/src/main/AndroidManifest.xml
-
-      - name: Restore fixed debug signing key
-        env:
-          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
-        run: |
-          mkdir -p "$HOME/.android"
-          echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
 
       - name: Remove generated default test
         run: rm -f test/widget_test.dart
@@ -73,4 +71,4 @@ jobs:
         with:
           name: Shiny-Mobile-Test-v0.1.1-test
           path: release/Shiny_Mobile_Test_v0.1.1-test.apk
-          retention-days: 14
+          retention-days: 7
