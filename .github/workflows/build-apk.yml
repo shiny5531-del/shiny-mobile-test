@@ -42,7 +42,7 @@ jobs:
 
       - name: Set Android app name
         run: |
-          sed -i 's/android:label="shiny_mobile_test"/android:label="Shiny Mobile Test"/' \
+          sed -i 's/android:label="shiny_mobile_test"/android:label="파크골프 스코어카드"/' \
             android/app/src/main/AndroidManifest.xml
 
       - name: Restore fixed debug signing key when configured

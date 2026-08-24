@@ -1,14 +1,14 @@
 {
   "document_type": "ai_project_release_manifest",
   "project_id": "shiny_mobile_test",
-  "project_name": "Shiny Mobile Test",
+  "project_name": "파크골프 스코어카드",
   "project_type": "mobile",
   "repository": "https://github.com/shiny5531-del/shiny-mobile-test",
   "visibility": "public-test",
   "version": "v0.1.2-test",
   "flutter_version": "0.1.2+3",
   "package_id": "com.increate.shiny_mobile_test",
-  "app_display_name": "Shiny Mobile Test",
+  "app_display_name": "파크골프 스코어카드",
   "artifact": {
     "apk_name": "Shiny_Mobile_Test_v0.1.2-test.apk",
     "artifact_name": "Shiny-Mobile-Test-v0.1.2-test",
