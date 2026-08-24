@@ -2,7 +2,7 @@ name: shiny_mobile_test
 description: Shiny Mobile APK build test
 publish_to: "none"
 
-version: 0.1.7+8
+version: 0.1.8+9
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -10,6 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  share_plus: ^10.1.4
   shared_preferences: ^2.3.5
   url_launcher: ^6.3.1
 
@@ -22,3 +23,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/data/park_golf_courses_kr.csv
+    - assets/data/parkgolf_stage2_master.json

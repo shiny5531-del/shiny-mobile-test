@@ -19,3 +19,4 @@ key.properties
 *.aab
 
 server/data/*.json
+cafe24_api/db_config.php

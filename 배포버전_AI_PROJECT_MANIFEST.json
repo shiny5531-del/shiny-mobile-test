@@ -5,13 +5,13 @@
   "project_type": "mobile",
   "repository": "https://github.com/shiny5531-del/shiny-mobile-test",
   "visibility": "public-test",
-  "version": "v0.1.7-test",
-  "flutter_version": "0.1.7+8",
+  "version": "v0.1.8-test",
+  "flutter_version": "0.1.8+9",
   "package_id": "com.increate.shiny_mobile_test",
   "app_display_name": "파크골프 스코어카드",
   "artifact": {
-    "apk_name": "Shiny_Mobile_Test_v0.1.7-test.apk",
-    "artifact_name": "Shiny-Mobile-Test-v0.1.7-test",
+    "apk_name": "Shiny_Mobile_Test_v0.1.8-test.apk",
+    "artifact_name": "Shiny-Mobile-Test-v0.1.8-test",
     "workflow": ".github/workflows/build-apk.yml",
     "latest_successful_run": "https://github.com/shiny5531-del/shiny-mobile-test/actions/runs/32709974331"
   },
@@ -27,9 +27,9 @@
     "fixed_debug_signing_status": "optional_fallback_verified_invalid_secret_does_not_block_build"
   },
   "status": {
-    "state": "park_golf_score_summary_refinement",
-    "last_updated_at": "2026-08-24T20:55:00+09:00",
-    "next_version": "v0.1.8-test",
-    "next_action": "Review the interactive preview and decide whether to run the next APK build."
+    "state": "park_golf_stage2_data_and_apk_build",
+    "last_updated_at": "2026-08-24T21:40:00+09:00",
+    "next_version": "v0.1.9-test",
+    "next_action": "Install the v0.1.8-test APK and test course selection, step count, saved record sharing, and template prefilling."
   }
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.8-test - 2026-08-24
+
+- Added total step count input to the active round summary.
+- Added total step count to saved round records and shared score text.
+- Added bundled Stage 2 hole distance/par JSON data.
+- Added automatic distance/par prefilling when selected course names match bundled templates.
+- Added Cafe24 PHP/MySQL API files for text-only score and hole data submission.
+- Softened A/B/C course colors to pastel tones.
+- Added player name reuse and active round restoration after app restart.
+- Added interrupted-round save flow.
+
 ## v0.1.7-test - 2026-08-24
 
 - Removed course editing from active hole rows.

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData, rootBundle;
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -9,11 +10,13 @@ void main() {
   runApp(const ShinyMobileTestApp());
 }
 
-const String appVersion = 'v0.1.7-test';
+const String appVersion = 'v0.1.8-test';
 const String draftStorageKey = 'park_golf_scorecard_draft_v1';
 const String customCoursesStorageKey = 'park_golf_custom_courses_v1';
 const String savedRoundsStorageKey = 'park_golf_saved_rounds_v1';
+const String playerHistoryStorageKey = 'park_golf_player_history_v1';
 const String courseCsvAssetPath = 'assets/data/park_golf_courses_kr.csv';
+const String holeTemplateJsonAssetPath = 'assets/data/parkgolf_stage2_master.json';
 
 class ShinyMobileTestApp extends StatelessWidget {
   const ShinyMobileTestApp({super.key});
@@ -51,9 +54,9 @@ class CourseInfo {
 }
 
 const List<CourseInfo> courses = [
-  CourseInfo('A', 'A 코스', Color(0xFFE54848), Colors.white),
-  CourseInfo('B', 'B 코스', Color(0xFF2673CF), Colors.white),
-  CourseInfo('C', 'C 코스', Color(0xFFF0C337), Color(0xFF2D2D2D)),
+  CourseInfo('A', 'A 코스', Color(0xFFFFD7D7), Color(0xFF5F1F1F)),
+  CourseInfo('B', 'B 코스', Color(0xFFD8E8FF), Color(0xFF1D3C68)),
+  CourseInfo('C', 'C 코스', Color(0xFFFFF2B8), Color(0xFF594600)),
   CourseInfo('D', 'D 코스', Color(0xFFFFFFFF), Color(0xFF2D2D2D)),
 ];
 
@@ -142,6 +145,18 @@ class HoleEntry {
   }
 }
 
+class HoleTemplate {
+  const HoleTemplate({
+    required this.hole,
+    required this.distanceM,
+    required this.par,
+  });
+
+  final int hole;
+  final int distanceM;
+  final int par;
+}
+
 class ScoreCardPage extends StatefulWidget {
   const ScoreCardPage({super.key});
 
@@ -152,6 +167,7 @@ class ScoreCardPage extends StatefulWidget {
 class _ScoreCardPageState extends State<ScoreCardPage> {
   final TextEditingController _placeController = TextEditingController();
   final TextEditingController _dateController = TextEditingController();
+  final TextEditingController _stepsController = TextEditingController();
   final List<TextEditingController> _playerControllers = List.generate(
     4,
     (index) => TextEditingController(text: '플레이어 ${index + 1}'),
@@ -160,6 +176,8 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   late final List<HoleEntry> _holes;
   List<ParkGolfCourse> _baseCourses = [];
   List<ParkGolfCourse> _customCourses = [];
+  List<String> _playerNameHistory = [];
+  Map<String, Map<String, List<HoleTemplate>>> _holeTemplates = {};
   ParkGolfCourse? _selectedGolfCourse;
   String? _draftSelectedCourseId;
   int _playerCount = 4;
@@ -189,6 +207,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   void dispose() {
     _placeController.dispose();
     _dateController.dispose();
+    _stepsController.dispose();
     for (final controller in _playerControllers) {
       controller.dispose();
     }
@@ -223,7 +242,23 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
 
   Future<void> _loadInitialData() async {
     await _loadDraft();
+    await _loadPlayerHistory();
     await _loadCourses();
+    await _loadHoleTemplates();
+  }
+
+  Future<void> _loadPlayerHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(playerHistoryStorageKey);
+    if (raw == null) return;
+    final names = (jsonDecode(raw) as List<dynamic>)
+        .map((item) => item.toString().trim())
+        .where((name) => name.isNotEmpty)
+        .toList();
+    if (!mounted) return;
+    setState(() {
+      _playerNameHistory = names;
+    });
   }
 
   Future<void> _loadCourses() async {
@@ -272,6 +307,83 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     });
   }
 
+  String _normalCourseName(String value) {
+    return value
+        .replaceAll(RegExp(r'\[[^\]]+\]'), '')
+        .replaceAll('파크골프장', '')
+        .replaceAll('파크골프', '')
+        .replaceAll('구장', '')
+        .replaceAll(RegExp(r'\s+'), '')
+        .trim()
+        .toLowerCase();
+  }
+
+  Future<void> _loadHoleTemplates() async {
+    final jsonText = await rootBundle.loadString(holeTemplateJsonAssetPath);
+    final rows = jsonDecode(jsonText) as List<dynamic>;
+    final templates = <String, Map<String, List<HoleTemplate>>>{};
+
+    for (final item in rows) {
+      final row = item as Map<String, dynamic>;
+      final name = (row['golf_name'] as String? ?? '').trim();
+      final courseType = (row['course_type'] as String? ?? '').trim().toUpperCase();
+      final holeInfoRaw = (row['hole_info_json'] as String? ?? '').trim();
+      if (name.isEmpty || !['A', 'B', 'C', 'D'].contains(courseType)) continue;
+      if (holeInfoRaw.isEmpty) continue;
+
+      final holeInfo = jsonDecode(holeInfoRaw) as List<dynamic>;
+      final holes = <HoleTemplate>[];
+      for (final holeItem in holeInfo) {
+        final hole = holeItem as Map<String, dynamic>;
+        final holeNo = int.tryParse(hole['hole'].toString()) ?? 0;
+        final distanceM = int.tryParse(hole['distance'].toString()) ?? 0;
+        final par = int.tryParse(hole['par'].toString()) ?? 0;
+        if (holeNo >= 1 && holeNo <= 9 && distanceM > 0 && par >= 3 && par <= 5) {
+          holes.add(HoleTemplate(hole: holeNo, distanceM: distanceM, par: par));
+        }
+      }
+      if (holes.isEmpty) continue;
+
+      final key = _normalCourseName(name);
+      templates.putIfAbsent(key, () => {});
+      templates[key]![courseType] = holes;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _holeTemplates = templates;
+    });
+    _applyHoleTemplatesForSelectedCourse();
+  }
+
+  void _applyHoleTemplatesForSelectedCourse() {
+    final course = _selectedGolfCourse;
+    if (course == null || _holeTemplates.isEmpty) return;
+    final key = _normalCourseName(course.name);
+    final templates = _holeTemplates[key];
+    if (templates == null) return;
+
+    setState(() {
+      for (var index = 0; index < _holes.length; index++) {
+        final hole = _holes[index];
+        final courseTemplates = templates[hole.course];
+        if (courseTemplates == null) continue;
+        HoleTemplate? template;
+        for (final item in courseTemplates) {
+          if (item.hole == hole.hole) {
+            template = item;
+            break;
+          }
+        }
+        if (template == null) continue;
+        if (hole.distanceController.text.trim().isNotEmpty) continue;
+        hole.distanceController.text = template.distanceM.toString();
+        hole.par = template.par;
+      }
+    });
+    _saveDraft();
+  }
+
   Future<void> _loadDraft() async {
     final prefs = await SharedPreferences.getInstance();
     final rawDraft = prefs.getString(draftStorageKey);
@@ -284,8 +396,10 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     setState(() {
       _placeController.text = data['place'] as String? ?? '';
       _dateController.text = data['date'] as String? ?? _dateController.text;
+      _stepsController.text = data['steps'] as String? ?? '';
       _draftSelectedCourseId = data['selectedCourseId'] as String?;
       _activeCourseSlot = data['activeCourseSlot'] as int? ?? 0;
+      _gameStarted = data['gameStarted'] as bool? ?? false;
       _playerCount = data['playerCount'] as int? ?? 4;
       final players = data['players'] as List<dynamic>? ?? [];
       for (var index = 0; index < _playerControllers.length; index++) {
@@ -314,8 +428,10 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     final data = {
       'place': _placeController.text,
       'date': _dateController.text,
+      'steps': _stepsController.text,
       'selectedCourseId': _selectedGolfCourse?.id,
       'activeCourseSlot': _activeCourseSlot,
+      'gameStarted': _gameStarted,
       'playerCount': _playerCount,
       'players': _playerControllers.map((controller) => controller.text).toList(),
       'holes': _holes.map((hole) => hole.toJson()).toList(),
@@ -336,10 +452,16 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   Map<String, dynamic> _roundSnapshot() {
+    return _roundSnapshotWithStatus('저장');
+  }
+
+  Map<String, dynamic> _roundSnapshotWithStatus(String status) {
     return {
       'id': 'round-${DateTime.now().millisecondsSinceEpoch}',
+      'status': status,
       'place': _placeController.text,
       'date': _dateController.text,
+      'steps': _stepsController.text,
       'courseName': _selectedGolfCourse?.name,
       'courseId': _selectedGolfCourse?.id,
       'playerCount': _playerCount,
@@ -355,6 +477,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
 
   Future<void> _saveRoundRecord() async {
     await _saveDraft();
+    await _rememberPlayerNames();
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(savedRoundsStorageKey);
     final rounds = raw == null ? <dynamic>[] : jsonDecode(raw) as List<dynamic>;
@@ -364,6 +487,41 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('저장 기록에 남겼습니다')),
     );
+  }
+
+  Future<void> _saveInterruptedRoundAndExit() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(savedRoundsStorageKey);
+    final rounds = raw == null ? <dynamic>[] : jsonDecode(raw) as List<dynamic>;
+    rounds.insert(0, _roundSnapshotWithStatus('중단'));
+    await prefs.setString(savedRoundsStorageKey, jsonEncode(rounds.take(50).toList()));
+    await _rememberPlayerNames();
+    setState(() {
+      _gameStarted = false;
+      _activeCourseSlot = 0;
+    });
+    await _saveDraft();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('중단된 스코어를 저장했습니다')),
+    );
+  }
+
+  Future<void> _rememberPlayerNames() async {
+    final currentNames = [
+      for (var index = 0; index < _playerCount; index++)
+        _playerControllers[index].text.trim(),
+    ].where((name) => name.isNotEmpty).toList();
+    final merged = <String>[
+      ...currentNames,
+      ..._playerNameHistory.where((name) => !currentNames.contains(name)),
+    ].take(30).toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(playerHistoryStorageKey, jsonEncode(merged));
+    if (!mounted) return;
+    setState(() {
+      _playerNameHistory = merged;
+    });
   }
 
   Future<void> _openSavedRounds() async {
@@ -397,6 +555,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       _selectedGolfCourse = course;
       _placeController.text = course.name;
     });
+    _applyHoleTemplatesForSelectedCourse();
     _saveDraft();
   }
 
@@ -630,6 +789,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         _holes[index].par = defaultPars[_holes[index].hole - 1];
       }
     });
+    _applyHoleTemplatesForSelectedCourse();
     _saveDraft();
   }
 
@@ -637,6 +797,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     setState(() {
       _gameStarted = true;
     });
+    _rememberPlayerNames();
     _saveDraft();
   }
 
@@ -737,6 +898,11 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             icon: const Icon(Icons.tune),
           ),
           IconButton(
+            tooltip: '종료',
+            onPressed: _saveInterruptedRoundAndExit,
+            icon: const Icon(Icons.stop_circle_outlined),
+          ),
+          IconButton(
             tooltip: '저장 기록',
             onPressed: _openSavedRounds,
             icon: const Icon(Icons.history),
@@ -781,9 +947,40 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'A+B 코스 합계',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'A+B 코스 합계',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                ),
+              ),
+              Container(
+                width: 126,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: TextField(
+                  controller: _stepsController,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF173F35),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                  decoration: const InputDecoration(
+                    hintText: '총 걸음수',
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  onChanged: (_) => _saveDraft(),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 6),
           GridView.count(
@@ -1049,6 +1246,22 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             decoration: InputDecoration(
               labelText: '플레이어 ${index + 1}',
               prefixIcon: const Icon(Icons.person_outline),
+              suffixIcon: _playerNameHistory.isEmpty
+                  ? null
+                  : PopupMenuButton<String>(
+                      tooltip: '최근 이름',
+                      icon: const Icon(Icons.expand_more),
+                      onSelected: (name) {
+                        setState(() {
+                          _playerControllers[index].text = name;
+                        });
+                        _saveDraft();
+                      },
+                      itemBuilder: (context) => [
+                        for (final name in _playerNameHistory)
+                          PopupMenuItem(value: name, child: Text(name)),
+                      ],
+                    ),
             ),
             onChanged: (_) {
               setState(() {});
@@ -1319,6 +1532,25 @@ class SavedRoundsPage extends StatelessWidget {
 
   final List<Map<String, dynamic>> rounds;
 
+  String _shareText(Map<String, dynamic> round) {
+    final players = (round['players'] as List<dynamic>? ?? [])
+        .map((item) => item.toString())
+        .toList();
+    final totals = (round['totals'] as List<dynamic>? ?? [])
+        .map((item) => item.toString())
+        .toList();
+    final buffer = StringBuffer()
+      ..writeln('[파크골프 스코어카드]')
+      ..writeln(round['courseName'] as String? ?? round['place'] as String? ?? '경기장 미입력')
+      ..writeln(round['date'] as String? ?? '')
+      ..writeln('총 걸음수 : ${round['steps'] ?? ''}')
+      ..writeln('파 ${round['totalPar'] ?? 0}');
+    for (var index = 0; index < players.length && index < totals.length; index++) {
+      buffer.writeln('${players[index]} : ${totals[index]}');
+    }
+    return buffer.toString().trim();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1365,9 +1597,16 @@ class SavedRoundsPage extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          round['date'] as String? ?? '',
+                          '${round['date'] as String? ?? ''} · ${round['status'] as String? ?? '저장'}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
+                        if ((round['steps'] as String? ?? '').trim().isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            '총 걸음수 : ${round['steps']}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         Wrap(
                           spacing: 8,
@@ -1379,6 +1618,15 @@ class SavedRoundsPage extends StatelessWidget {
                                 player++)
                               Chip(label: Text('${players[player]} ${totals[player]}')),
                           ],
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: OutlinedButton.icon(
+                            onPressed: () => Share.share(_shareText(round)),
+                            icon: const Icon(Icons.ios_share),
+                            label: const Text('공유'),
+                          ),
                         ),
                       ],
                     ),
