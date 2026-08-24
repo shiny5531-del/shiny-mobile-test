@@ -51,8 +51,13 @@ jobs:
         run: |
           if [ -n "$ANDROID_DEBUG_KEYSTORE_BASE64" ]; then
             mkdir -p "$HOME/.android"
-            echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
-            chmod 600 "$HOME/.android/debug.keystore"
+            if printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"; then
+              chmod 600 "$HOME/.android/debug.keystore"
+              echo "Fixed debug keystore restored from ANDROID_DEBUG_KEYSTORE_BASE64."
+            else
+              rm -f "$HOME/.android/debug.keystore"
+              echo "ANDROID_DEBUG_KEYSTORE_BASE64 is set but is not valid base64. Using the runner default debug keystore."
+            fi
           else
             echo "ANDROID_DEBUG_KEYSTORE_BASE64 is not set. Using the runner default debug keystore."
           fi
