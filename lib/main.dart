@@ -1,14 +1,18 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() {
   runApp(const ShinyMobileTestApp());
 }
 
-const String appVersion = 'v0.1.3-test';
+const String appVersion = 'v0.1.4-test';
 const String draftStorageKey = 'park_golf_scorecard_draft_v1';
+const String customCoursesStorageKey = 'park_golf_custom_courses_v1';
+const String courseCsvAssetPath = 'assets/data/park_golf_courses_kr.csv';
 
 class ShinyMobileTestApp extends StatelessWidget {
   const ShinyMobileTestApp({super.key});
@@ -54,6 +58,63 @@ const List<CourseInfo> courses = [
 
 const List<int> defaultPars = [3, 3, 3, 3, 4, 4, 4, 4, 5];
 
+class ParkGolfCourse {
+  const ParkGolfCourse({
+    required this.id,
+    required this.region,
+    required this.name,
+    required this.phone,
+    required this.address,
+    required this.holeCount,
+    this.isUserAdded = false,
+  });
+
+  final String id;
+  final String region;
+  final String name;
+  final String phone;
+  final String address;
+  final int holeCount;
+  final bool isUserAdded;
+
+  factory ParkGolfCourse.fromCsvRow(List<String> row, int index) {
+    String valueAt(int column) => column < row.length ? row[column].trim() : '';
+
+    return ParkGolfCourse(
+      id: 'csv-$index',
+      region: valueAt(0),
+      name: valueAt(1),
+      phone: valueAt(2),
+      address: valueAt(3),
+      holeCount: int.tryParse(valueAt(4)) ?? 0,
+    );
+  }
+
+  factory ParkGolfCourse.fromJson(Map<String, dynamic> json) {
+    return ParkGolfCourse(
+      id: json['id'] as String? ?? 'user-${DateTime.now().millisecondsSinceEpoch}',
+      region: json['region'] as String? ?? '직접등록',
+      name: json['name'] as String? ?? '',
+      phone: json['phone'] as String? ?? '',
+      address: json['address'] as String? ?? '',
+      holeCount: json['holeCount'] as int? ?? 0,
+      isUserAdded: json['isUserAdded'] as bool? ?? true,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'region': region,
+      'name': name,
+      'phone': phone,
+      'address': address,
+      'holeCount': holeCount,
+      'isUserAdded': isUserAdded,
+    };
+  }
+}
+
 class HoleEntry {
   HoleEntry({
     required this.course,
@@ -96,9 +157,14 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   );
 
   late final List<HoleEntry> _holes;
+  List<ParkGolfCourse> _baseCourses = [];
+  List<ParkGolfCourse> _customCourses = [];
+  ParkGolfCourse? _selectedGolfCourse;
+  String? _draftSelectedCourseId;
   int _playerCount = 4;
   bool _gameStarted = false;
   bool _savedOnce = false;
+  bool _coursesLoaded = false;
 
   @override
   void initState() {
@@ -114,7 +180,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         scoreControllers: List.generate(4, (_) => TextEditingController()),
       );
     });
-    _loadDraft();
+    _loadInitialData();
   }
 
   @override
@@ -133,6 +199,77 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     super.dispose();
   }
 
+  List<String> _parseCsvLine(String line) {
+    final values = <String>[];
+    final buffer = StringBuffer();
+    var insideQuote = false;
+
+    for (var index = 0; index < line.length; index++) {
+      final char = line[index];
+      if (char == '"') {
+        insideQuote = !insideQuote;
+      } else if (char == ',' && !insideQuote) {
+        values.add(buffer.toString());
+        buffer.clear();
+      } else {
+        buffer.write(char);
+      }
+    }
+    values.add(buffer.toString());
+    return values;
+  }
+
+  Future<void> _loadInitialData() async {
+    await _loadDraft();
+    await _loadCourses();
+  }
+
+  Future<void> _loadCourses() async {
+    final csvText = await rootBundle.loadString(courseCsvAssetPath);
+    final rows = const LineSplitter()
+        .convert(csvText)
+        .skip(1)
+        .where((line) => line.trim().isNotEmpty)
+        .toList();
+    final baseCourses = [
+      for (var index = 0; index < rows.length; index++)
+        ParkGolfCourse.fromCsvRow(_parseCsvLine(rows[index]), index),
+    ].where((course) => course.name.isNotEmpty).toList();
+
+    final prefs = await SharedPreferences.getInstance();
+    final customRaw = prefs.getString(customCoursesStorageKey);
+    final customCourses = <ParkGolfCourse>[];
+    if (customRaw != null) {
+      final customData = jsonDecode(customRaw) as List<dynamic>;
+      for (final item in customData) {
+        customCourses.add(ParkGolfCourse.fromJson(item as Map<String, dynamic>));
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _baseCourses = baseCourses;
+      _customCourses = customCourses;
+      final allCourses = [...customCourses, ...baseCourses];
+      final draftSelected = _draftSelectedCourseId;
+      if (draftSelected != null) {
+        for (final course in allCourses) {
+          if (course.id == draftSelected) {
+            _selectedGolfCourse = course;
+            break;
+          }
+        }
+      }
+      if (_selectedGolfCourse == null && allCourses.isNotEmpty) {
+        _selectedGolfCourse = allCourses.first;
+      }
+      if (_placeController.text.trim().isEmpty && _selectedGolfCourse != null) {
+        _placeController.text = _selectedGolfCourse!.name;
+      }
+      _coursesLoaded = true;
+    });
+  }
+
   Future<void> _loadDraft() async {
     final prefs = await SharedPreferences.getInstance();
     final rawDraft = prefs.getString(draftStorageKey);
@@ -145,6 +282,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     setState(() {
       _placeController.text = data['place'] as String? ?? '';
       _dateController.text = data['date'] as String? ?? _dateController.text;
+      _draftSelectedCourseId = data['selectedCourseId'] as String?;
       _playerCount = data['playerCount'] as int? ?? 4;
       final players = data['players'] as List<dynamic>? ?? [];
       for (var index = 0; index < _playerControllers.length; index++) {
@@ -173,6 +311,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     final data = {
       'place': _placeController.text,
       'date': _dateController.text,
+      'selectedCourseId': _selectedGolfCourse?.id,
       'playerCount': _playerCount,
       'players': _playerControllers.map((controller) => controller.text).toList(),
       'holes': _holes.map((hole) => hole.toJson()).toList(),
@@ -188,6 +327,77 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     if (showMessage) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('이 기기에 저장했습니다')),
+      );
+    }
+  }
+
+  List<ParkGolfCourse> _allGolfCourses() {
+    return [..._customCourses, ..._baseCourses];
+  }
+
+  Future<void> _saveCustomCourses() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      customCoursesStorageKey,
+      jsonEncode(_customCourses.map((course) => course.toJson()).toList()),
+    );
+  }
+
+  void _selectGolfCourse(ParkGolfCourse course) {
+    setState(() {
+      _selectedGolfCourse = course;
+      _placeController.text = course.name;
+    });
+    _saveDraft();
+  }
+
+  Future<void> _openGolfCoursePicker() async {
+    final selected = await Navigator.of(context).push<ParkGolfCourse>(
+      MaterialPageRoute(
+        builder: (_) => GolfCoursePickerPage(
+          courses: _allGolfCourses(),
+          selectedCourseId: _selectedGolfCourse?.id,
+          onAddCourse: _addCustomCourse,
+        ),
+      ),
+    );
+    if (selected != null) {
+      _selectGolfCourse(selected);
+    }
+  }
+
+  Future<ParkGolfCourse> _addCustomCourse(ParkGolfCourse course) async {
+    final savedCourse = ParkGolfCourse(
+      id: 'user-${DateTime.now().millisecondsSinceEpoch}',
+      region: course.region.trim().isEmpty ? '직접등록' : course.region.trim(),
+      name: course.name.trim(),
+      phone: course.phone.trim(),
+      address: course.address.trim(),
+      holeCount: course.holeCount,
+      isUserAdded: true,
+    );
+    setState(() {
+      _customCourses.insert(0, savedCourse);
+    });
+    await _saveCustomCourses();
+    return savedCourse;
+  }
+
+  Future<void> _openSelectedCourseMap() async {
+    final course = _selectedGolfCourse;
+    if (course == null || course.address.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('지도에서 볼 주소가 없습니다')),
+      );
+      return;
+    }
+
+    final query = Uri.encodeComponent('${course.name} ${course.address}');
+    final uri = Uri.parse('https://map.kakao.com/link/search/$query');
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('지도 앱을 열지 못했습니다')),
       );
     }
   }
@@ -375,16 +585,71 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   Widget _buildGameInfo() {
+    final selectedCourse = _selectedGolfCourse;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(
-          controller: _placeController,
-          decoration: const InputDecoration(
-            labelText: '경기장',
-            prefixIcon: Icon(Icons.flag_outlined),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF7FAF6),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFDCE6D9)),
           ),
-          onChanged: (_) => _saveDraft(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.location_on_outlined),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      selectedCourse?.name ?? '경기장을 선택하세요',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (selectedCourse != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '${selectedCourse.region} · ${selectedCourse.holeCount}홀',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  selectedCourse.address,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _coursesLoaded ? _openGolfCoursePicker : null,
+                      icon: const Icon(Icons.search),
+                      label: Text(_coursesLoaded ? '골프장 선택' : '목록 읽는 중'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.outlined(
+                    tooltip: '지도',
+                    onPressed: _openSelectedCourseMap,
+                    icon: const Icon(Icons.map_outlined),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 10),
         TextField(
@@ -706,6 +971,289 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       backgroundColor: Colors.white,
       label: Text('$label $value'),
       labelStyle: const TextStyle(fontWeight: FontWeight.w800),
+    );
+  }
+}
+
+class GolfCoursePickerPage extends StatefulWidget {
+  const GolfCoursePickerPage({
+    super.key,
+    required this.courses,
+    required this.selectedCourseId,
+    required this.onAddCourse,
+  });
+
+  final List<ParkGolfCourse> courses;
+  final String? selectedCourseId;
+  final Future<ParkGolfCourse> Function(ParkGolfCourse course) onAddCourse;
+
+  @override
+  State<GolfCoursePickerPage> createState() => _GolfCoursePickerPageState();
+}
+
+class _GolfCoursePickerPageState extends State<GolfCoursePickerPage> {
+  final TextEditingController _searchController = TextEditingController();
+  late List<ParkGolfCourse> _courses;
+
+  @override
+  void initState() {
+    super.initState();
+    _courses = widget.courses;
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<ParkGolfCourse> _filteredCourses() {
+    final keyword = _searchController.text.trim().toLowerCase();
+    if (keyword.isEmpty) return _courses;
+    return _courses.where((course) {
+      return course.name.toLowerCase().contains(keyword) ||
+          course.address.toLowerCase().contains(keyword) ||
+          course.region.toLowerCase().contains(keyword);
+    }).toList();
+  }
+
+  Future<void> _openAddCoursePage() async {
+    final added = await Navigator.of(context).push<ParkGolfCourse>(
+      MaterialPageRoute(
+        builder: (_) => AddGolfCoursePage(onAddCourse: widget.onAddCourse),
+      ),
+    );
+    if (added == null) return;
+    setState(() {
+      _courses = [added, ..._courses];
+      _searchController.clear();
+    });
+    if (mounted) {
+      Navigator.of(context).pop(added);
+    }
+  }
+
+  Future<void> _openMap(ParkGolfCourse course) async {
+    final query = Uri.encodeComponent('${course.name} ${course.address}');
+    final uri = Uri.parse('https://map.kakao.com/link/search/$query');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final courses = _filteredCourses();
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('골프장 선택'),
+        actions: [
+          IconButton(
+            tooltip: '직접 등록',
+            onPressed: _openAddCoursePage,
+            icon: const Icon(Icons.add_location_alt_outlined),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  labelText: '이름, 지역, 주소 검색',
+                  prefixIcon: Icon(Icons.search),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '등록 골프장 ${_courses.length}곳',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: _openAddCoursePage,
+                    icon: const Icon(Icons.add),
+                    label: const Text('없는 구장 등록'),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                itemCount: courses.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final course = courses[index];
+                  final selected = course.id == widget.selectedCourseId;
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                            : const Color(0xFFDCE6D9),
+                      ),
+                    ),
+                    child: ListTile(
+                      title: Text(
+                        course.name,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(
+                        '${course.region} · ${course.holeCount}홀\n${course.address}',
+                      ),
+                      isThreeLine: true,
+                      leading: Icon(
+                        course.isUserAdded
+                            ? Icons.edit_location_alt_outlined
+                            : Icons.flag_outlined,
+                      ),
+                      trailing: IconButton(
+                        tooltip: '지도',
+                        onPressed: () => _openMap(course),
+                        icon: const Icon(Icons.map_outlined),
+                      ),
+                      onTap: () => Navigator.of(context).pop(course),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AddGolfCoursePage extends StatefulWidget {
+  const AddGolfCoursePage({
+    super.key,
+    required this.onAddCourse,
+  });
+
+  final Future<ParkGolfCourse> Function(ParkGolfCourse course) onAddCourse;
+
+  @override
+  State<AddGolfCoursePage> createState() => _AddGolfCoursePageState();
+}
+
+class _AddGolfCoursePageState extends State<AddGolfCoursePage> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _regionController = TextEditingController();
+  final TextEditingController _addressController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _holeCountController = TextEditingController(text: '18');
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _regionController.dispose();
+    _addressController.dispose();
+    _phoneController.dispose();
+    _holeCountController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    final address = _addressController.text.trim();
+    if (name.isEmpty || address.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('골프장명과 주소를 입력해 주세요')),
+      );
+      return;
+    }
+
+    final course = await widget.onAddCourse(
+      ParkGolfCourse(
+        id: 'pending',
+        region: _regionController.text.trim().isEmpty
+            ? '직접등록'
+            : _regionController.text.trim(),
+        name: name,
+        phone: _phoneController.text.trim(),
+        address: address,
+        holeCount: int.tryParse(_holeCountController.text.trim()) ?? 0,
+        isUserAdded: true,
+      ),
+    );
+    if (mounted) {
+      Navigator.of(context).pop(course);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('없는 구장 등록')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: '골프장명',
+                prefixIcon: Icon(Icons.flag_outlined),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _regionController,
+              decoration: const InputDecoration(
+                labelText: '지역',
+                prefixIcon: Icon(Icons.public),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _addressController,
+              decoration: const InputDecoration(
+                labelText: '주소',
+                prefixIcon: Icon(Icons.place_outlined),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _phoneController,
+              decoration: const InputDecoration(
+                labelText: '전화번호',
+                prefixIcon: Icon(Icons.call_outlined),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _holeCountController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '홀수',
+                prefixIcon: Icon(Icons.pin_outlined),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _save,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('등록하고 선택'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

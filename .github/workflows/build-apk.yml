@@ -78,11 +78,11 @@ jobs:
         run: |
           mkdir -p release
           cp build/app/outputs/flutter-apk/app-debug.apk \
-             release/Shiny_Mobile_Test_v0.1.3-test.apk
+             release/Shiny_Mobile_Test_v0.1.4-test.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Shiny-Mobile-Test-v0.1.3-test
-          path: release/Shiny_Mobile_Test_v0.1.3-test.apk
+          name: Shiny-Mobile-Test-v0.1.4-test
+          path: release/Shiny_Mobile_Test_v0.1.4-test.apk
           retention-days: 7

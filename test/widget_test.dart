@@ -10,8 +10,9 @@ void main() {
     await tester.pumpWidget(const ShinyMobileTestApp());
 
     expect(find.text('파크골프 스코어카드'), findsWidgets);
-    expect(find.text('경기장'), findsOneWidget);
+    expect(find.text('경기 설정'), findsOneWidget);
     expect(find.text('날짜'), findsOneWidget);
+    expect(find.text('골프장 선택'), findsWidgets);
     expect(find.text('경기 시작'), findsOneWidget);
     expect(find.text('A-B 기본'), findsOneWidget);
   });

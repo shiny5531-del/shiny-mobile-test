@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.4-test - 2026-08-24
+
+- Added the Korean park golf course CSV as a bundled app asset.
+- Added course search and selection from bundled course data.
+- Added user-only local registration for missing courses.
+- Added address-based Kakao Map search links from selected courses.
+
 ## v0.1.3-test - 2026-08-24
 
 - Updated the scorecard into a setup-first game flow.
