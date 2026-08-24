@@ -18,11 +18,11 @@ Every push to `main` starts the APK build workflow.
 
 Artifact name:
 
-`Shiny-Mobile-Test-v0.1.1-test`
+`Shiny-Mobile-Test-v0.1.2-test`
 
 APK file:
 
-`Shiny_Mobile_Test_v0.1.1-test.apk`
+`Shiny_Mobile_Test_v0.1.2-test.apk`
 
 ## Checks
 

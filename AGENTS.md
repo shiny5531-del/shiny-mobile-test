@@ -13,15 +13,15 @@ This repository is a public Flutter Android APK test project.
 
 Current version:
 
-`v0.1.1-test`
+`v0.1.2-test`
 
 Flutter version field:
 
-`0.1.1+2`
+`0.1.2+3`
 
 Next development version:
 
-`v0.1.2-test`
+`v0.1.3-test`
 
 ## Build
 
