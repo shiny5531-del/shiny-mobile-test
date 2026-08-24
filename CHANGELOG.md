@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.3-test - 2026-08-24
+
+- Updated the scorecard into a setup-first game flow.
+- Added local-only draft save using device storage.
+- Added a cleaner course-colored scorecard layout for active play.
+- Added a compact active-game top bar with place and course/hole summary.
+
 ## v0.1.2-test - 2026-08-24
 
 - Replaced the counter test screen with a park golf scorecard.
