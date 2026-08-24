@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shiny_mobile_test/main.dart';
 
 void main() {
-  testWidgets('park golf scorecard shows base fields and score table', (
+  testWidgets('park golf scorecard shows base setup fields', (
     tester,
   ) async {
     await tester.pumpWidget(const ShinyMobileTestApp());
@@ -14,6 +14,6 @@ void main() {
     expect(find.text('플레이어 수'), findsOneWidget);
     expect(find.text('A-B 기본'), findsOneWidget);
     expect(find.text('C-D 기본'), findsOneWidget);
-    expect(find.byType(DataTable), findsOneWidget);
+    expect(find.text('플레이어 1'), findsOneWidget);
   });
 }
