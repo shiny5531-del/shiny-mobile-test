@@ -1323,15 +1323,15 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
                 memo: memoController.text,
                 facts: preparedFacts,
               );
-              if (!context.mounted) return;
-              Navigator.of(context).pop(true);
-              ScaffoldMessenger.of(context).showSnackBar(
+              if (!mounted) return;
+              Navigator.of(this.context).pop(true);
+              ScaffoldMessenger.of(this.context).showSnackBar(
                 SnackBar(content: Text('홀 정보 $accepted개를 제안했습니다')),
               );
             } catch (error) {
-              if (!context.mounted) return;
+              if (!mounted) return;
               setDialogState(() => sending = false);
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(this.context).showSnackBar(
                 SnackBar(content: Text('전송 실패: $error')),
               );
             }
