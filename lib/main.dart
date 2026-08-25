@@ -708,20 +708,6 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     };
   }
 
-  Future<void> _saveRoundRecord() async {
-    await _saveDraft();
-    await _rememberPlayerNames();
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(savedRoundsStorageKey);
-    final rounds = raw == null ? <dynamic>[] : jsonDecode(raw) as List<dynamic>;
-    rounds.insert(0, _roundSnapshot());
-    await prefs.setString(savedRoundsStorageKey, jsonEncode(rounds.take(50).toList()));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('저장 기록에 남겼습니다')),
-    );
-  }
-
   Future<void> _saveInterruptedRoundAndExit() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(savedRoundsStorageKey);
@@ -1337,13 +1323,13 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
                 memo: memoController.text,
                 facts: preparedFacts,
               );
-              if (!mounted) return;
+              if (!context.mounted) return;
               Navigator.of(context).pop(true);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('홀 정보 $accepted개를 제안했습니다')),
               );
             } catch (error) {
-              if (!mounted) return;
+              if (!context.mounted) return;
               setDialogState(() => sending = false);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('전송 실패: $error')),
