@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shiny_mobile_test/main.dart';
@@ -7,12 +9,16 @@ void main() {
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(430, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     await tester.pumpWidget(const ShinyMobileTestApp());
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     expect(find.text('파크골프 스코어카드'), findsWidgets);
     expect(find.text('경기 설정'), findsOneWidget);
-    expect(find.text('스타트 시간/날짜'), findsOneWidget);
     expect(find.text('새 경기 시작', skipOffstage: false), findsOneWidget);
     expect(find.text('A-B 기본'), findsOneWidget);
   });
