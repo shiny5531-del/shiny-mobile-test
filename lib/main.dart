@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData, rootBundle;
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:pedometer/pedometer.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -17,6 +21,10 @@ const String savedRoundsStorageKey = 'park_golf_saved_rounds_v1';
 const String playerHistoryStorageKey = 'park_golf_player_history_v1';
 const String courseCsvAssetPath = 'assets/data/park_golf_courses_kr.csv';
 const String holeTemplateJsonAssetPath = 'assets/data/parkgolf_stage2_master.json';
+const String parkGolfApiBaseUrl = 'https://s2sin.com/parkgolf';
+const String coursesApiPath = '/courses.php';
+const String courseHolesApiPath = '/course_holes.php';
+const String submitSuggestionPath = '/submit_suggestion.php';
 
 class ShinyMobileTestApp extends StatelessWidget {
   const ShinyMobileTestApp({super.key});
@@ -106,6 +114,24 @@ class ParkGolfCourse {
     );
   }
 
+  factory ParkGolfCourse.fromServerJson(Map<String, dynamic> json) {
+    final region = (json['region'] ?? '').toString().trim();
+    final city = (json['city'] ?? '').toString().trim();
+    final regionLabel = [
+      if (region.isNotEmpty) region,
+      if (city.isNotEmpty && city != region) city,
+    ].join(' ');
+
+    return ParkGolfCourse(
+      id: (json['id'] ?? '').toString(),
+      region: regionLabel.isEmpty ? '서버등록' : regionLabel,
+      name: (json['name'] ?? '').toString().trim(),
+      phone: (json['phone'] ?? '-').toString().trim(),
+      address: (json['address'] ?? '').toString().trim(),
+      holeCount: int.tryParse((json['hole_count'] ?? '0').toString()) ?? 0,
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -167,11 +193,17 @@ class ScoreCardPage extends StatefulWidget {
 class _ScoreCardPageState extends State<ScoreCardPage> {
   final TextEditingController _placeController = TextEditingController();
   final TextEditingController _dateController = TextEditingController();
+  final TextEditingController _startTimeController = TextEditingController();
   final TextEditingController _stepsController = TextEditingController();
+  final TextEditingController _firstCourseController =
+      TextEditingController(text: 'A');
+  final TextEditingController _secondCourseController =
+      TextEditingController(text: 'B');
   final List<TextEditingController> _playerControllers = List.generate(
     4,
-    (index) => TextEditingController(text: '플레이어 ${index + 1}'),
+    (_) => TextEditingController(),
   );
+  final ScrollController _scoreScrollController = ScrollController();
 
   late final List<HoleEntry> _holes;
   List<ParkGolfCourse> _baseCourses = [];
@@ -182,14 +214,23 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   String? _draftSelectedCourseId;
   int _playerCount = 4;
   int _activeCourseSlot = 0;
+  int _focusedHoleIndex = 0;
+  int? _stepBaseline;
   bool _gameStarted = false;
+  bool _hasPausedGame = false;
+  bool _setupOpenedFromScore = false;
   bool _savedOnce = false;
   bool _coursesLoaded = false;
+  bool _stepSensorActive = false;
+  String? _stepSensorMessage;
+  late final List<GlobalKey> _holeKeys;
+  StreamSubscription<StepCount>? _stepCountSubscription;
 
   @override
   void initState() {
     super.initState();
-    _dateController.text = _formatDate(DateTime.now());
+    _dateController.text = _formatDisplayDate(DateTime.now());
+    _startTimeController.text = _formatDisplayTime(DateTime.now());
     _holes = List.generate(18, (index) {
       final holeNumber = (index % 9) + 1;
       return HoleEntry(
@@ -200,14 +241,63 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         scoreControllers: List.generate(4, (_) => TextEditingController()),
       );
     });
+    _holeKeys = List.generate(18, (_) => GlobalKey());
     _loadInitialData();
+  }
+
+  String _formatDisplayDate(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}.  $month.  $day.';
+  }
+
+  String _formatDisplayTime(DateTime date) {
+    final hour = date.hour;
+    final minute = date.minute.toString().padLeft(2, '0');
+    final period = hour < 12 ? '오전' : '오후';
+    final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+    return '$period  ${displayHour.toString().padLeft(2, '0')}:$minute';
+  }
+
+  DateTime _selectedDateValue() {
+    final numbers = RegExp(r'\d+')
+        .allMatches(_dateController.text)
+        .map((match) => int.tryParse(match.group(0) ?? ''))
+        .whereType<int>()
+        .toList();
+    if (numbers.length >= 3) {
+      return DateTime(numbers[0], numbers[1], numbers[2]);
+    }
+    return DateTime.now();
+  }
+
+  TimeOfDay _selectedTimeValue() {
+    final text = _startTimeController.text.trim();
+    final numbers = RegExp(r'\d+')
+        .allMatches(text)
+        .map((match) => int.tryParse(match.group(0) ?? ''))
+        .whereType<int>()
+        .toList();
+    if (numbers.length >= 2) {
+      var hour = numbers[0];
+      final minute = numbers[1].clamp(0, 59).toInt();
+      if (text.contains('오후') && hour < 12) hour += 12;
+      if (text.contains('오전') && hour == 12) hour = 0;
+      return TimeOfDay(hour: hour.clamp(0, 23).toInt(), minute: minute);
+    }
+    return TimeOfDay.now();
   }
 
   @override
   void dispose() {
     _placeController.dispose();
     _dateController.dispose();
+    _startTimeController.dispose();
     _stepsController.dispose();
+    _firstCourseController.dispose();
+    _secondCourseController.dispose();
+    _scoreScrollController.dispose();
+    _stepCountSubscription?.cancel();
     for (final controller in _playerControllers) {
       controller.dispose();
     }
@@ -262,49 +352,132 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   Future<void> _loadCourses() async {
+    final serverCourses = await _loadServerCourses();
+    if (serverCourses.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      final customCourses = await _readCustomCourses(prefs);
+      if (!mounted) return;
+      setState(() {
+        _baseCourses = serverCourses;
+        _customCourses = customCourses;
+        _selectInitialCourse([...customCourses, ...serverCourses]);
+        _coursesLoaded = true;
+      });
+      await _loadServerHoleTemplatesForSelectedCourse(overwriteExisting: false);
+      return;
+    }
+
     final csvText = await rootBundle.loadString(courseCsvAssetPath);
     final rows = const LineSplitter()
         .convert(csvText)
         .skip(1)
         .where((line) => line.trim().isNotEmpty)
         .toList();
-    final baseCourses = [
+    final csvCourses = [
       for (var index = 0; index < rows.length; index++)
         ParkGolfCourse.fromCsvRow(_parseCsvLine(rows[index]), index),
     ].where((course) => course.name.isNotEmpty).toList();
+    final csvByKey = {
+      for (final course in csvCourses) _normalCourseName(course.name): course,
+    };
 
-    final prefs = await SharedPreferences.getInstance();
-    final customRaw = prefs.getString(customCoursesStorageKey);
-    final customCourses = <ParkGolfCourse>[];
-    if (customRaw != null) {
-      final customData = jsonDecode(customRaw) as List<dynamic>;
-      for (final item in customData) {
-        customCourses.add(ParkGolfCourse.fromJson(item as Map<String, dynamic>));
+    final jsonText = await rootBundle.loadString(holeTemplateJsonAssetPath);
+    final jsonRows = jsonDecode(jsonText) as List<dynamic>;
+    final jsonCourseRows = <String, Map<String, dynamic>>{};
+    final jsonCourseOrder = <String>[];
+    for (final item in jsonRows) {
+      final row = item as Map<String, dynamic>;
+      final name = (row['golf_name'] as String? ?? '').trim();
+      if (name.isEmpty) continue;
+      final key = _normalCourseName(name);
+      jsonCourseRows.putIfAbsent(key, () {
+        jsonCourseOrder.add(key);
+        return row;
+      });
+      final current = jsonCourseRows[key]!;
+      final currentHoles = current['total_holes'] as int? ?? 0;
+      final rowHoles = row['total_holes'] as int? ?? 0;
+      if (rowHoles > currentHoles) {
+        jsonCourseRows[key] = row;
       }
     }
+
+    final usedKeys = <String>{};
+    final baseCourses = <ParkGolfCourse>[
+      for (var index = 0; index < jsonCourseOrder.length; index++)
+        () {
+          final key = jsonCourseOrder[index];
+          usedKeys.add(key);
+          final row = jsonCourseRows[key]!;
+          final name = (row['golf_name'] as String? ?? '').trim();
+          final csvCourse = csvByKey[key];
+          return ParkGolfCourse(
+            id: 'json-$key',
+            region: csvCourse?.region ?? _regionFromTemplateName(name),
+            name: csvCourse?.name ?? _displayNameFromTemplateName(name),
+            phone: csvCourse?.phone ?? '-',
+            address: csvCourse?.address ?? '',
+            holeCount: csvCourse?.holeCount ?? (row['total_holes'] as int? ?? 0),
+          );
+        }(),
+      for (final course in csvCourses)
+        if (!usedKeys.contains(_normalCourseName(course.name))) course,
+    ];
+
+    final prefs = await SharedPreferences.getInstance();
+    final customCourses = await _readCustomCourses(prefs);
 
     if (!mounted) return;
     setState(() {
       _baseCourses = baseCourses;
       _customCourses = customCourses;
-      final allCourses = [...customCourses, ...baseCourses];
-      final draftSelected = _draftSelectedCourseId;
-      if (draftSelected != null) {
-        for (final course in allCourses) {
-          if (course.id == draftSelected) {
-            _selectedGolfCourse = course;
-            break;
-          }
-        }
-      }
-      if (_selectedGolfCourse == null && allCourses.isNotEmpty) {
-        _selectedGolfCourse = allCourses.first;
-      }
-      if (_placeController.text.trim().isEmpty && _selectedGolfCourse != null) {
-        _placeController.text = _selectedGolfCourse!.name;
-      }
+      _selectInitialCourse([...customCourses, ...baseCourses]);
       _coursesLoaded = true;
     });
+  }
+
+  Future<List<ParkGolfCourse>> _loadServerCourses() async {
+    try {
+      final uri = Uri.parse('$parkGolfApiBaseUrl$coursesApiPath');
+      final data = await _getJson(uri);
+      final rows = data['courses'] as List<dynamic>? ?? [];
+      return rows
+          .whereType<Map<String, dynamic>>()
+          .map(ParkGolfCourse.fromServerJson)
+          .where((course) => course.id.isNotEmpty && course.name.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<List<ParkGolfCourse>> _readCustomCourses(SharedPreferences prefs) async {
+    final customRaw = prefs.getString(customCoursesStorageKey);
+    final customCourses = <ParkGolfCourse>[];
+    if (customRaw == null) return customCourses;
+    final customData = jsonDecode(customRaw) as List<dynamic>;
+    for (final item in customData) {
+      customCourses.add(ParkGolfCourse.fromJson(item as Map<String, dynamic>));
+    }
+    return customCourses;
+  }
+
+  void _selectInitialCourse(List<ParkGolfCourse> allCourses) {
+    final draftSelected = _draftSelectedCourseId;
+    if (draftSelected != null) {
+      for (final course in allCourses) {
+        if (course.id == draftSelected) {
+          _selectedGolfCourse = course;
+          break;
+        }
+      }
+    }
+    if (_selectedGolfCourse == null && allCourses.isNotEmpty) {
+      _selectedGolfCourse = allCourses.first;
+    }
+    if (_placeController.text.trim().isEmpty && _selectedGolfCourse != null) {
+      _placeController.text = _selectedGolfCourse!.name;
+    }
   }
 
   String _normalCourseName(String value) {
@@ -322,13 +495,29 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     final jsonText = await rootBundle.loadString(holeTemplateJsonAssetPath);
     final rows = jsonDecode(jsonText) as List<dynamic>;
     final templates = <String, Map<String, List<HoleTemplate>>>{};
+    final templateCourses = <ParkGolfCourse>[];
+    final knownCourseKeys = _baseCourses.map((course) => _normalCourseName(course.name)).toSet();
 
     for (final item in rows) {
       final row = item as Map<String, dynamic>;
       final name = (row['golf_name'] as String? ?? '').trim();
       final courseType = (row['course_type'] as String? ?? '').trim().toUpperCase();
       final holeInfoRaw = (row['hole_info_json'] as String? ?? '').trim();
-      if (name.isEmpty || !['A', 'B', 'C', 'D'].contains(courseType)) continue;
+      if (name.isEmpty) continue;
+      final key = _normalCourseName(name);
+      if (!knownCourseKeys.contains(key)) {
+        templateCourses.add(
+          ParkGolfCourse(
+            id: 'template-$key',
+            region: _regionFromTemplateName(name),
+            name: _displayNameFromTemplateName(name),
+            phone: '-',
+            address: '',
+            holeCount: row['total_holes'] as int? ?? 0,
+          ),
+        );
+        knownCourseKeys.add(key);
+      }
       if (holeInfoRaw.isEmpty) continue;
 
       final holeInfo = jsonDecode(holeInfoRaw) as List<dynamic>;
@@ -344,19 +533,42 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       }
       if (holes.isEmpty) continue;
 
-      final key = _normalCourseName(name);
       templates.putIfAbsent(key, () => {});
-      templates[key]![courseType] = holes;
+      final templateKey = ['A', 'B', 'C', 'D'].contains(courseType)
+          ? courseType
+          : 'AUTO${templates[key]!.length}';
+      templates[key]![templateKey] = holes;
     }
 
     if (!mounted) return;
     setState(() {
       _holeTemplates = templates;
+      if (templateCourses.isNotEmpty) {
+        _baseCourses = [..._baseCourses, ...templateCourses];
+      }
+      if (_selectedGolfCourse == null && _draftSelectedCourseId != null) {
+        for (final course in _allGolfCourses()) {
+          if (course.id == _draftSelectedCourseId) {
+            _selectedGolfCourse = course;
+            break;
+          }
+        }
+      }
     });
-    _applyHoleTemplatesForSelectedCourse();
+    _applyHoleTemplatesForSelectedCourse(overwriteExisting: false);
   }
 
-  void _applyHoleTemplatesForSelectedCourse() {
+  String _displayNameFromTemplateName(String value) {
+    return value.replaceAll(RegExp(r'\[[^\]]+\]'), '').trim();
+  }
+
+  String _regionFromTemplateName(String value) {
+    final matches = RegExp(r'\[([^\]]+)\]').allMatches(value).toList();
+    if (matches.isEmpty) return '자료등록';
+    return matches.map((match) => match.group(1)!).join(' ');
+  }
+
+  void _applyHoleTemplatesForSelectedCourse({bool overwriteExisting = false}) {
     final course = _selectedGolfCourse;
     if (course == null || _holeTemplates.isEmpty) return;
     final key = _normalCourseName(course.name);
@@ -366,7 +578,9 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     setState(() {
       for (var index = 0; index < _holes.length; index++) {
         final hole = _holes[index];
-        final courseTemplates = templates[hole.course];
+        final courseTemplates = templates[hole.course] ??
+            templates['AUTO${index ~/ 9}'] ??
+            templates['AUTO0'];
         if (courseTemplates == null) continue;
         HoleTemplate? template;
         for (final item in courseTemplates) {
@@ -376,7 +590,9 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
           }
         }
         if (template == null) continue;
-        if (hole.distanceController.text.trim().isNotEmpty) continue;
+        if (!overwriteExisting && hole.distanceController.text.trim().isNotEmpty) {
+          continue;
+        }
         hole.distanceController.text = template.distanceM.toString();
         hole.par = template.par;
       }
@@ -396,15 +612,23 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     setState(() {
       _placeController.text = data['place'] as String? ?? '';
       _dateController.text = data['date'] as String? ?? _dateController.text;
+      _startTimeController.text =
+          data['startTime'] as String? ?? _startTimeController.text;
       _stepsController.text = data['steps'] as String? ?? '';
+      _firstCourseController.text = data['firstCourse'] as String? ?? 'A';
+      _secondCourseController.text = data['secondCourse'] as String? ?? 'B';
       _draftSelectedCourseId = data['selectedCourseId'] as String?;
       _activeCourseSlot = data['activeCourseSlot'] as int? ?? 0;
+      _focusedHoleIndex = data['focusedHoleIndex'] as int? ?? 0;
+      _stepBaseline = data['stepBaseline'] as int?;
       _gameStarted = data['gameStarted'] as bool? ?? false;
+      _hasPausedGame = data['hasPausedGame'] as bool? ?? false;
+      _setupOpenedFromScore = data['setupOpenedFromScore'] as bool? ?? false;
       _playerCount = data['playerCount'] as int? ?? 4;
       final players = data['players'] as List<dynamic>? ?? [];
       for (var index = 0; index < _playerControllers.length; index++) {
         final playerName = index < players.length ? players[index] as String? : null;
-        _playerControllers[index].text = playerName ?? '플레이어 ${index + 1}';
+        _playerControllers[index].text = playerName ?? '';
       }
       for (var index = 0; index < _holes.length && index < holes.length; index++) {
         final holeData = holes[index] as Map<String, dynamic>;
@@ -428,10 +652,17 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     final data = {
       'place': _placeController.text,
       'date': _dateController.text,
+      'startTime': _startTimeController.text,
       'steps': _stepsController.text,
+      'firstCourse': _firstCourseController.text,
+      'secondCourse': _secondCourseController.text,
       'selectedCourseId': _selectedGolfCourse?.id,
       'activeCourseSlot': _activeCourseSlot,
+      'focusedHoleIndex': _focusedHoleIndex,
+      'stepBaseline': _stepBaseline,
       'gameStarted': _gameStarted,
+      'hasPausedGame': _hasPausedGame,
+      'setupOpenedFromScore': _setupOpenedFromScore,
       'playerCount': _playerCount,
       'players': _playerControllers.map((controller) => controller.text).toList(),
       'holes': _holes.map((hole) => hole.toJson()).toList(),
@@ -456,20 +687,22 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   Map<String, dynamic> _roundSnapshotWithStatus(String status) {
+    final activePlayers = _activePlayerIndexes();
     return {
       'id': 'round-${DateTime.now().millisecondsSinceEpoch}',
       'status': status,
       'place': _placeController.text,
       'date': _dateController.text,
+      'startTime': _startTimeController.text,
       'steps': _stepsController.text,
       'courseName': _selectedGolfCourse?.name,
       'courseId': _selectedGolfCourse?.id,
-      'playerCount': _playerCount,
-      'players': _playerControllers.map((controller) => controller.text).toList(),
+      'playerCount': activePlayers.length,
+      'players': _activePlayerNames(),
       'holes': _holes.map((hole) => hole.toJson()).toList(),
       'totalPar': _parTotal(),
       'totals': [
-        for (var index = 0; index < _playerCount; index++) _scoreTotal(index),
+        for (final index in activePlayers) _scoreTotal(index),
       ],
       'savedAt': DateTime.now().toIso8601String(),
     };
@@ -493,17 +726,21 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(savedRoundsStorageKey);
     final rounds = raw == null ? <dynamic>[] : jsonDecode(raw) as List<dynamic>;
-    rounds.insert(0, _roundSnapshotWithStatus('중단'));
+    rounds.insert(0, _roundSnapshotWithStatus('종료'));
     await prefs.setString(savedRoundsStorageKey, jsonEncode(rounds.take(50).toList()));
     await _rememberPlayerNames();
     setState(() {
       _gameStarted = false;
+      _hasPausedGame = false;
       _activeCourseSlot = 0;
+      _focusedHoleIndex = 0;
+      _clearScoresAndRoundProgress();
     });
+    await _stopStepTracking();
     await _saveDraft();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('중단된 스코어를 저장했습니다')),
+      const SnackBar(content: Text('경기를 종료하고 기록에 남겼습니다')),
     );
   }
 
@@ -550,12 +787,17 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
-  void _selectGolfCourse(ParkGolfCourse course) {
+  Future<void> _selectGolfCourse(ParkGolfCourse course) async {
     setState(() {
       _selectedGolfCourse = course;
       _placeController.text = course.name;
     });
-    _applyHoleTemplatesForSelectedCourse();
+    final appliedServerData = await _loadServerHoleTemplatesForSelectedCourse(
+      overwriteExisting: true,
+    );
+    if (!appliedServerData) {
+      _applyHoleTemplatesForSelectedCourse(overwriteExisting: true);
+    }
     _saveDraft();
   }
 
@@ -570,7 +812,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       ),
     );
     if (selected != null) {
-      _selectGolfCourse(selected);
+      await _selectGolfCourse(selected);
     }
   }
 
@@ -610,10 +852,95 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     }
   }
 
-  String _formatDate(DateTime date) {
-    final month = date.month.toString().padLeft(2, '0');
-    final day = date.day.toString().padLeft(2, '0');
-    return '${date.year}-$month-$day';
+  Future<void> _pickRoundDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDateValue(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _dateController.text = _formatDisplayDate(picked);
+    });
+    _saveDraft();
+  }
+
+  Future<void> _pickStartTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _selectedTimeValue(),
+    );
+    if (picked == null || !mounted) return;
+    final now = DateTime.now();
+    setState(() {
+      _startTimeController.text = _formatDisplayTime(
+        DateTime(now.year, now.month, now.day, picked.hour, picked.minute),
+      );
+    });
+    _saveDraft();
+  }
+
+  void _clearScoresAndRoundProgress({bool resetDateTime = true}) {
+    if (resetDateTime) {
+      final now = DateTime.now();
+      _dateController.text = _formatDisplayDate(now);
+      _startTimeController.text = _formatDisplayTime(now);
+    }
+    _stepsController.clear();
+    _stepBaseline = null;
+    for (final hole in _holes) {
+      for (final controller in hole.scoreControllers) {
+        controller.clear();
+      }
+    }
+  }
+
+  Future<void> _startStepTracking({bool resetBaseline = false}) async {
+    if (resetBaseline) {
+      _stepBaseline = null;
+    }
+
+    final permission = await Permission.activityRecognition.request();
+    if (!permission.isGranted) {
+      if (!mounted) return;
+      setState(() {
+        _stepSensorActive = false;
+        _stepSensorMessage = '걸음수 권한 필요';
+      });
+      return;
+    }
+
+    await _stepCountSubscription?.cancel();
+    _stepCountSubscription = Pedometer.stepCountStream.listen(
+      (event) {
+        if (!mounted || !_gameStarted) return;
+        setState(() {
+          _stepBaseline ??= event.steps;
+          final steps = event.steps - _stepBaseline!;
+          _stepsController.text = steps < 0 ? '0' : steps.toString();
+          _stepSensorActive = true;
+          _stepSensorMessage = null;
+        });
+        _saveDraft();
+      },
+      onError: (_) {
+        if (!mounted) return;
+        setState(() {
+          _stepSensorActive = false;
+          _stepSensorMessage = '센서 미지원';
+        });
+      },
+    );
+  }
+
+  Future<void> _stopStepTracking() async {
+    await _stepCountSubscription?.cancel();
+    _stepCountSubscription = null;
+    if (!mounted) return;
+    setState(() {
+      _stepSensorActive = false;
+    });
   }
 
   int _readNumber(TextEditingController controller) {
@@ -629,6 +956,20 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
       0,
       (sum, hole) => sum + _readNumber(hole.scoreControllers[playerIndex]),
     );
+  }
+
+  List<int> _activePlayerIndexes() {
+    return [
+      for (var index = 0; index < _playerCount; index++)
+        if (_playerControllers[index].text.trim().isNotEmpty) index,
+    ];
+  }
+
+  List<String> _activePlayerNames() {
+    return [
+      for (final index in _activePlayerIndexes())
+        _playerControllers[index].text.trim(),
+    ];
   }
 
   Iterable<int> _currentCourseIndexes() {
@@ -695,8 +1036,78 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   void _showCourseSlot(int slot) {
     setState(() {
       _activeCourseSlot = slot;
+      _focusedHoleIndex = slot == 0 ? 0 : 9;
     });
     _saveDraft();
+  }
+
+  void _setScore(int holeIndex, int playerIndex, int score) {
+    final safeScore = score.clamp(1, 15);
+    setState(() {
+      _focusedHoleIndex = holeIndex;
+      _holes[holeIndex].scoreControllers[playerIndex].text = safeScore.toString();
+    });
+    _saveDraft();
+    _advanceWhenHoleComplete(holeIndex);
+  }
+
+  void _changeScore(int holeIndex, int playerIndex, int delta) {
+    final controller = _holes[holeIndex].scoreControllers[playerIndex];
+    final current = int.tryParse(controller.text.trim()) ?? 3;
+    _setScore(holeIndex, playerIndex, current + delta);
+  }
+
+  bool _holeScoresComplete(int holeIndex) {
+    final activePlayers = _activePlayerIndexes();
+    if (activePlayers.isEmpty) return false;
+    for (final player in activePlayers) {
+      if (_holes[holeIndex].scoreControllers[player].text.trim().isEmpty) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void _advanceWhenHoleComplete(int holeIndex) {
+    if (!_holeScoresComplete(holeIndex)) return;
+
+    final currentIndexes = _currentCourseIndexes().toList();
+    final position = currentIndexes.indexOf(holeIndex);
+    if (position < 0) return;
+
+    if (position < currentIndexes.length - 1) {
+      _focusHole(currentIndexes[position + 1]);
+      return;
+    }
+
+    if (_activeCourseSlot == 0) {
+      _showCourseSlot(1);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToFocusedHole());
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('마지막 홀까지 입력했습니다')),
+    );
+  }
+
+  void _focusHole(int holeIndex) {
+    setState(() {
+      _focusedHoleIndex = holeIndex;
+    });
+    _saveDraft();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToFocusedHole());
+  }
+
+  void _scrollToFocusedHole() {
+    final context = _holeKeys[_focusedHoleIndex].currentContext;
+    if (context == null) return;
+    Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOut,
+      alignment: 0.08,
+    );
   }
 
   List<Map<String, dynamic>> _holeFactsForSharing() {
@@ -721,49 +1132,332 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     ];
   }
 
-  Future<void> _showContributionPreview() async {
+  Future<Map<String, dynamic>> _postJson(
+    Uri uri,
+    Map<String, dynamic> payload,
+  ) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 10);
+    try {
+      final request = await client.postUrl(uri);
+      request.headers.contentType = ContentType.json;
+      request.write(jsonEncode(payload));
+
+      final response = await request.close().timeout(const Duration(seconds: 20));
+      final body = await utf8.decodeStream(response);
+      final data = body.trim().isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(body) as Map<String, dynamic>;
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException(
+          (data['error'] as String?) ?? '서버 응답 오류 ${response.statusCode}',
+          uri: uri,
+        );
+      }
+      return data;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Map<String, dynamic>> _getJson(Uri uri) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 10);
+    try {
+      final request = await client.getUrl(uri);
+      final response = await request.close().timeout(const Duration(seconds: 20));
+      final body = await utf8.decodeStream(response);
+      final data = body.trim().isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(body) as Map<String, dynamic>;
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException(
+          (data['error'] as String?) ?? '서버 응답 오류 ${response.statusCode}',
+          uri: uri,
+        );
+      }
+      return data;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<bool> _loadServerHoleTemplatesForSelectedCourse({
+    required bool overwriteExisting,
+  }) async {
+    final course = _selectedGolfCourse;
+    if (course == null || int.tryParse(course.id) == null) return false;
+
+    try {
+      final uri = Uri.parse('$parkGolfApiBaseUrl$courseHolesApiPath').replace(
+        queryParameters: {'course_id': course.id},
+      );
+      final data = await _getJson(uri);
+      final rows = data['holes'] as List<dynamic>? ?? [];
+      final templates = rows
+          .whereType<Map<String, dynamic>>()
+          .map((row) {
+            final courseCode = (row['course_code'] ?? '').toString().trim();
+            final holeNo = int.tryParse((row['hole_no'] ?? '').toString()) ?? 0;
+            final distanceM =
+                int.tryParse((row['distance_m'] ?? '').toString()) ?? 0;
+            final par = int.tryParse((row['par'] ?? '').toString()) ?? 0;
+            if (!['A', 'B', 'C', 'D'].contains(courseCode) ||
+                holeNo < 1 ||
+                holeNo > 9 ||
+                distanceM < 1 ||
+                par < 3 ||
+                par > 5) {
+              return null;
+            }
+            return MapEntry(
+              '$courseCode-$holeNo',
+              HoleTemplate(hole: holeNo, distanceM: distanceM, par: par),
+            );
+          })
+          .whereType<MapEntry<String, HoleTemplate>>();
+
+      final byCodeAndHole = <String, HoleTemplate>{};
+      for (final entry in templates) {
+        byCodeAndHole[entry.key] = entry.value;
+      }
+      if (byCodeAndHole.isEmpty || !mounted) return false;
+
+      setState(() {
+        for (final hole in _holes) {
+          final template = byCodeAndHole['${hole.course}-${hole.hole}'];
+          if (template == null) continue;
+          if (!overwriteExisting && hole.distanceController.text.trim().isNotEmpty) {
+            continue;
+          }
+          hole.distanceController.text = template.distanceM.toString();
+          hole.par = template.par;
+        }
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<int> _submitHoleSuggestion({
+    required String memo,
+    required List<Map<String, dynamic>> facts,
+  }) async {
+    final course = _selectedGolfCourse;
+    if (course == null) {
+      throw const FormatException('골프장을 먼저 선택해 주세요');
+    }
+
+    final payload = {
+      'suggestionType': 'hole',
+      'payload': {
+        'courseId': course.id,
+        'courseName': course.name,
+        'region': course.region,
+        'address': course.address,
+        'phone': course.phone,
+        'roundDate': _dateController.text.trim(),
+        'memo': memo.trim(),
+        'appVersion': appVersion,
+        'facts': facts,
+      },
+    };
+    final uri = Uri.parse('$parkGolfApiBaseUrl$submitSuggestionPath');
+    final result = await _postJson(uri, payload);
+    return result['accepted'] as int? ?? facts.length;
+  }
+
+  Future<void> _showContributionConsent() async {
     final facts = _holeFactsForSharing();
     if (facts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('공유할 거리 정보가 아직 없습니다')),
+        const SnackBar(content: Text('제안할 홀 정보가 아직 없습니다')),
       );
       return;
     }
 
-    final payload = const JsonEncoder.withIndent('  ').convert({
-      'type': 'hole_fact_contribution',
-      'version': 1,
-      'facts': facts,
-    });
+    final memoController = TextEditingController();
+    final editableFacts = [
+      for (final fact in facts)
+        {
+          'courseCode': TextEditingController(text: '${fact['courseCode']}'),
+          'holeNo': TextEditingController(text: '${fact['holeNo']}'),
+          'distanceM': TextEditingController(text: '${fact['distanceM']}'),
+          'par': TextEditingController(text: '${fact['par']}'),
+        },
+    ];
+    var sending = false;
 
-    await showDialog<void>(
+    final submitted = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('공유 데이터 미리보기'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: SelectableText(payload),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('닫기'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: payload));
-              Navigator.of(context).pop();
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> submit() async {
+            final preparedFacts = <Map<String, dynamic>>[];
+            for (final row in editableFacts) {
+              final courseCode = row['courseCode']!.text.trim().toUpperCase();
+              final holeNo = int.tryParse(row['holeNo']!.text.trim()) ?? 0;
+              final distanceM =
+                  int.tryParse(row['distanceM']!.text.trim()) ?? 0;
+              final par = int.tryParse(row['par']!.text.trim()) ?? 0;
+              if (courseCode.isEmpty && holeNo == 0 && distanceM == 0) {
+                continue;
+              }
+              if (!['A', 'B', 'C', 'D'].contains(courseCode) ||
+                  holeNo < 1 ||
+                  holeNo > 9 ||
+                  distanceM < 1 ||
+                  distanceM > 300 ||
+                  par < 3 ||
+                  par > 5) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('코스, 홀, 거리, 파 값을 확인해 주세요')),
+                );
+                return;
+              }
+              preparedFacts.add({
+                'courseCode': courseCode,
+                'holeNo': holeNo,
+                'distanceM': distanceM,
+                'par': par,
+              });
+            }
+            if (preparedFacts.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('공유 후보 데이터를 복사했습니다')),
+                const SnackBar(content: Text('전송할 홀 정보가 없습니다')),
               );
-            },
-            child: const Text('복사'),
-          ),
-        ],
+              return;
+            }
+
+            setDialogState(() => sending = true);
+            try {
+              final accepted = await _submitHoleSuggestion(
+                memo: memoController.text,
+                facts: preparedFacts,
+              );
+              if (!mounted) return;
+              Navigator.of(context).pop(true);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('홀 정보 $accepted개를 제안했습니다')),
+              );
+            } catch (error) {
+              if (!mounted) return;
+              setDialogState(() => sending = false);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('전송 실패: $error')),
+              );
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('홀 정보 제안'),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '${_selectedGolfCourse?.name ?? _placeController.text} · '
+                      '플레이어 이름은 보내지 않습니다',
+                    ),
+                    const SizedBox(height: 12),
+                    for (var index = 0; index < editableFacts.length; index++) ...[
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 72,
+                            child: TextField(
+                              controller: editableFacts[index]['courseCode'],
+                              enabled: !sending,
+                              textCapitalization: TextCapitalization.characters,
+                              decoration: const InputDecoration(
+                                labelText: '코스',
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: editableFacts[index]['holeNo'],
+                              enabled: !sending,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: '홀',
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: editableFacts[index]['distanceM'],
+                              enabled: !sending,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: '거리',
+                                suffixText: 'm',
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: editableFacts[index]['par'],
+                              enabled: !sending,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: '파',
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (index != editableFacts.length - 1)
+                        const SizedBox(height: 8),
+                    ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: memoController,
+                      enabled: !sending,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: '메모',
+                        hintText: '관리자가 확인할 내용을 적어 주세요',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: sending ? null : () => Navigator.of(context).pop(false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: sending ? null : submit,
+                child: Text(sending ? '전송 중' : '서버로 전송'),
+              ),
+            ],
+          );
+        },
       ),
     );
+
+    memoController.dispose();
+    for (final row in editableFacts) {
+      for (final controller in row.values) {
+        controller.dispose();
+      }
+    }
+    if (submitted != true || !mounted) return;
   }
 
   String _playerName(int index) {
@@ -772,7 +1466,13 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   CourseInfo _courseInfo(String course) {
-    return courses.firstWhere((item) => item.name == course);
+    final upper = course.trim().toUpperCase();
+    for (var index = 0; index < courses.length; index++) {
+      if (courses[index].name == upper) return courses[index];
+    }
+    final codeUnit = upper.isEmpty ? 0 : upper.codeUnitAt(0);
+    final fallbackIndex = codeUnit <= 0 ? 0 : (codeUnit - 'A'.codeUnitAt(0)) % 4;
+    return courses[fallbackIndex < 0 ? 0 : fallbackIndex];
   }
 
   String _courseSummary() {
@@ -781,30 +1481,97 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     return '${first.course} ${first.hole}홀 - ${last.course} ${last.hole}홀 · 합계 ${_parTotal()}홀';
   }
 
+  String _coursePairLabel() {
+    return '${_slotCourseName(0)}+${_slotCourseName(1)}';
+  }
+
   void _setDefaultCoursePair(String first, String second) {
+    final firstCourse = first.trim().isEmpty ? 'A' : first.trim().toUpperCase();
+    final secondCourse = second.trim().isEmpty ? 'B' : second.trim().toUpperCase();
     setState(() {
+      _firstCourseController.text = firstCourse;
+      _secondCourseController.text = secondCourse;
       for (var index = 0; index < _holes.length; index++) {
-        _holes[index].course = index < 9 ? first : second;
+        _holes[index].course = index < 9 ? firstCourse : secondCourse;
         _holes[index].hole = (index % 9) + 1;
         _holes[index].par = defaultPars[_holes[index].hole - 1];
       }
     });
-    _applyHoleTemplatesForSelectedCourse();
+    _applyHoleTemplatesForSelectedCourse(overwriteExisting: false);
     _saveDraft();
   }
 
   void _startGame() {
+    if (_activePlayerIndexes().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('플레이어 이름을 1명 이상 입력해 주세요')),
+      );
+      return;
+    }
+
     setState(() {
+      final firstCourse = _firstCourseController.text.trim().isEmpty
+          ? 'A'
+          : _firstCourseController.text.trim().toUpperCase();
+      final secondCourse = _secondCourseController.text.trim().isEmpty
+          ? 'B'
+          : _secondCourseController.text.trim().toUpperCase();
+      _firstCourseController.text = firstCourse;
+      _secondCourseController.text = secondCourse;
+      for (var index = 0; index < _holes.length; index++) {
+        _holes[index].course = index < 9 ? firstCourse : secondCourse;
+        _holes[index].hole = (index % 9) + 1;
+      }
+      _clearScoresAndRoundProgress();
       _gameStarted = true;
+      _hasPausedGame = false;
+      _setupOpenedFromScore = false;
+      _activeCourseSlot = 0;
+      _focusedHoleIndex = 0;
     });
     _rememberPlayerNames();
+    _startStepTracking(resetBaseline: true);
     _saveDraft();
+  }
+
+  void _resumePausedGame() {
+    setState(() {
+      _gameStarted = true;
+      _hasPausedGame = false;
+      _setupOpenedFromScore = false;
+    });
+    _startStepTracking();
+    _saveDraft();
+  }
+
+  void _pauseGame() {
+    setState(() {
+      _gameStarted = false;
+      _hasPausedGame = true;
+      _setupOpenedFromScore = false;
+    });
+    _stopStepTracking();
+    _saveDraft(showMessage: true);
   }
 
   void _backToSetup() {
     setState(() {
       _gameStarted = false;
+      _hasPausedGame = true;
+      _setupOpenedFromScore = true;
     });
+    _stopStepTracking();
+    _saveDraft();
+  }
+
+  void _returnToScoreFromSetup() {
+    setState(() {
+      _gameStarted = true;
+      _hasPausedGame = false;
+      _setupOpenedFromScore = false;
+    });
+    _startStepTracking();
+    _saveDraft();
   }
 
   @override
@@ -812,12 +1579,27 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     if (_gameStarted) {
       return _buildScoreScreen();
     }
-    return _buildSetupScreen();
+    return PopScope(
+      canPop: !_setupOpenedFromScore,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _setupOpenedFromScore) {
+          _returnToScoreFromSetup();
+        }
+      },
+      child: _buildSetupScreen(),
+    );
   }
 
   Widget _buildSetupScreen() {
     return Scaffold(
       appBar: AppBar(
+        leading: _setupOpenedFromScore
+            ? IconButton(
+                tooltip: '스코어카드로 돌아가기',
+                onPressed: _returnToScoreFromSetup,
+                icon: const Icon(Icons.arrow_back),
+              )
+            : null,
         title: const Text('파크골프 스코어카드'),
         centerTitle: true,
       ),
@@ -825,6 +1607,22 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
+            _buildSetupTopTabs(),
+            const SizedBox(height: 12),
+            if (_setupOpenedFromScore) ...[
+              FilledButton.icon(
+                onPressed: _returnToScoreFromSetup,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: const Icon(Icons.scoreboard_outlined),
+                label: const Text('스코어카드로 돌아가기'),
+              ),
+              const SizedBox(height: 12),
+            ],
             _panel(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -845,6 +1643,20 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             const SizedBox(height: 12),
             _panel(child: _buildPlayerInputs()),
             const SizedBox(height: 16),
+            if (_hasPausedGame) ...[
+              FilledButton.tonalIcon(
+                onPressed: _resumePausedGame,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: const Icon(Icons.play_circle_outline),
+                label: const Text('중단 경기 계속'),
+              ),
+              const SizedBox(height: 8),
+            ],
             FilledButton(
               onPressed: _startGame,
               style: FilledButton.styleFrom(
@@ -853,7 +1665,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              child: const Text('경기 시작'),
+              child: const Text('새 경기 시작'),
             ),
             const SizedBox(height: 10),
             Center(
@@ -865,6 +1677,38 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSetupTopTabs() {
+    return Row(
+      children: [
+        Expanded(
+          child: FilledButton(
+            onPressed: () {},
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF173F35),
+              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(44),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('경기'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: OutlinedButton(
+            onPressed: _coursesLoaded ? _openGolfCoursePicker : null,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF0E6A55),
+              minimumSize: const Size.fromHeight(44),
+              side: const BorderSide(color: Color(0xFF16866A)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('골프장'),
+          ),
+        ),
+      ],
     );
   }
 
@@ -891,33 +1735,14 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: '설정',
-            onPressed: _backToSetup,
-            icon: const Icon(Icons.tune),
-          ),
-          IconButton(
-            tooltip: '종료',
-            onPressed: _saveInterruptedRoundAndExit,
-            icon: const Icon(Icons.stop_circle_outlined),
-          ),
-          IconButton(
-            tooltip: '저장 기록',
-            onPressed: _openSavedRounds,
-            icon: const Icon(Icons.history),
-          ),
-          IconButton(
-            tooltip: '기록 저장',
-            onPressed: _saveRoundRecord,
-            icon: const Icon(Icons.save_outlined),
-          ),
-        ],
       ),
       body: SafeArea(
         child: ListView(
+          controller: _scoreScrollController,
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
           children: [
+            _buildGameActionBar(),
+            const SizedBox(height: 8),
             _buildOverallSummary(),
             const SizedBox(height: 8),
             _buildCourseSwitcher(),
@@ -949,14 +1774,17 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         children: [
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'A+B 코스 합계',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                  '${_coursePairLabel()} 코스 합계',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
               Container(
-                width: 126,
+                width: 142,
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -965,6 +1793,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
                 child: TextField(
                   controller: _stepsController,
                   keyboardType: TextInputType.number,
+                  readOnly: _stepSensorActive,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Color(0xFF173F35),
@@ -982,6 +1811,13 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
               ),
             ],
           ),
+          if (_stepSensorActive || _stepSensorMessage != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              _stepSensorActive ? '폰 센서 자동 측정 중' : _stepSensorMessage!,
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ],
           const SizedBox(height: 6),
           GridView.count(
             crossAxisCount: 2,
@@ -991,7 +1827,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             crossAxisSpacing: 8,
             mainAxisSpacing: 4,
             children: [
-              for (var index = 0; index < _playerCount; index++)
+              for (final index in _activePlayerIndexes())
                 _summaryMiniLine(
                   _playerName(index),
                   _scoreTotal(index),
@@ -999,6 +1835,69 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
                   index,
                 ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGameActionBar() {
+    return GridView.count(
+      crossAxisCount: 4,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      childAspectRatio: 1.45,
+      crossAxisSpacing: 8,
+      mainAxisSpacing: 8,
+      children: [
+        _gameActionButton(
+          icon: Icons.tune,
+          label: '설정',
+          onPressed: _backToSetup,
+        ),
+        _gameActionButton(
+          icon: Icons.pause_circle_outline,
+          label: '휴식',
+          onPressed: _pauseGame,
+        ),
+        _gameActionButton(
+          icon: Icons.history,
+          label: '기록',
+          onPressed: _openSavedRounds,
+        ),
+        _gameActionButton(
+          icon: Icons.stop_circle_outlined,
+          label: '종료',
+          onPressed: _saveInterruptedRoundAndExit,
+        ),
+      ],
+    );
+  }
+
+  Widget _gameActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return FilledButton.tonal(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: const Color(0xFFE5EFEA),
+        foregroundColor: const Color(0xFF173F35),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 22),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
           ),
         ],
       ),
@@ -1031,9 +1930,13 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     return Row(
       children: [
         Expanded(
-          child: FilledButton.tonal(
+          child: FilledButton(
             onPressed: () => _showCourseSlot(0),
             style: FilledButton.styleFrom(
+              backgroundColor:
+                  _activeCourseSlot == 0 ? const Color(0xFF173F35) : const Color(0xFFE5EFEA),
+              foregroundColor:
+                  _activeCourseSlot == 0 ? Colors.white : const Color(0xFF173F35),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
             child: Text('${_slotCourseName(0)}코스 보기'),
@@ -1041,9 +1944,13 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: FilledButton.tonal(
+          child: FilledButton(
             onPressed: () => _showCourseSlot(1),
             style: FilledButton.styleFrom(
+              backgroundColor:
+                  _activeCourseSlot == 1 ? const Color(0xFF173F35) : const Color(0xFFE5EFEA),
+              foregroundColor:
+                  _activeCourseSlot == 1 ? Colors.white : const Color(0xFF173F35),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
             child: Text('${_slotCourseName(1)}코스 보기'),
@@ -1071,19 +1978,19 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '홀 정보 공유 후보',
+                  '홀 정보 제안',
                   style: TextStyle(fontWeight: FontWeight.w800),
                 ),
                 Text(
-                  '거리 입력 ${facts.length}개 · 개인 타수는 제외',
+                  '거리 입력 ${facts.length}개 · 이름은 제외',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
           ),
           TextButton(
-            onPressed: _showContributionPreview,
-            child: const Text('보기'),
+            onPressed: _showContributionConsent,
+            child: const Text('제안'),
           ),
         ],
       ),
@@ -1170,13 +2077,34 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
           ),
         ),
         const SizedBox(height: 10),
-        TextField(
-          controller: _dateController,
-          decoration: const InputDecoration(
-            labelText: '날짜',
-            prefixIcon: Icon(Icons.event_outlined),
-          ),
-          onChanged: (_) => _saveDraft(),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _startTimeController,
+                readOnly: true,
+                onTap: _pickStartTime,
+                decoration: const InputDecoration(
+                  labelText: '시간',
+                  suffixIcon: Icon(Icons.access_time),
+                ),
+                onChanged: (_) => _saveDraft(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _dateController,
+                readOnly: true,
+                onTap: _pickRoundDate,
+                decoration: const InputDecoration(
+                  labelText: '스타트 시간/날짜',
+                  suffixIcon: Icon(Icons.calendar_today_outlined),
+                ),
+                onChanged: (_) => _saveDraft(),
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1193,22 +2121,85 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
               ),
         ),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
+        GridView.count(
+          crossAxisCount: 4,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          childAspectRatio: 1.42,
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
           children: [
             _courseButton('A-B 기본', 'A', 'B'),
             _courseButton('C-D 기본', 'C', 'D'),
+            _courseButton('B-A', 'B', 'A'),
+            _courseButton('D-C', 'D', 'C'),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(child: _customCourseField(_firstCourseController)),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: Text('|', style: TextStyle(fontWeight: FontWeight.w900)),
+            ),
+            Expanded(child: _customCourseField(_secondCourseController)),
+            const SizedBox(width: 8),
+            FilledButton.tonal(
+              onPressed: () => _setDefaultCoursePair(
+                _firstCourseController.text,
+                _secondCourseController.text,
+              ),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(64, 48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('적용'),
+            ),
+            const SizedBox(width: 6),
+            const Flexible(
+              child: Text(
+                '사용자 코스입력',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Color(0xFF173F35),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
           ],
         ),
       ],
     );
   }
 
+  Widget _customCourseField(TextEditingController controller) {
+    return TextField(
+      controller: controller,
+      textCapitalization: TextCapitalization.characters,
+      maxLength: 2,
+      textAlign: TextAlign.center,
+      decoration: const InputDecoration(
+        counterText: '',
+        labelText: '사용자 코스입력',
+        isDense: true,
+      ),
+      onChanged: (_) => _saveDraft(),
+    );
+  }
+
   Widget _courseButton(String label, String first, String second) {
-    return OutlinedButton(
+    final selected = _slotCourseName(0) == first && _slotCourseName(1) == second;
+    return FilledButton(
       onPressed: () => _setDefaultCoursePair(first, second),
-      style: OutlinedButton.styleFrom(
+      style: FilledButton.styleFrom(
+        backgroundColor: selected ? const Color(0xFF173F35) : const Color(0xFFE5EFEA),
+        foregroundColor: selected ? Colors.white : const Color(0xFF173F35),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
       child: Text(label),
@@ -1219,6 +2210,13 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Text(
+          '플레이어',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+        ),
+        const SizedBox(height: 12),
         DropdownButtonFormField<int>(
           initialValue: _playerCount,
           decoration: const InputDecoration(
@@ -1235,6 +2233,11 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             if (value == null) return;
             setState(() {
               _playerCount = value;
+              for (var player = value; player < _playerControllers.length; player++) {
+                for (final hole in _holes) {
+                  hole.scoreControllers[player].clear();
+                }
+              }
             });
             _saveDraft();
           },
@@ -1245,6 +2248,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             controller: _playerControllers[index],
             decoration: InputDecoration(
               labelText: '플레이어 ${index + 1}',
+              hintText: '이름입력',
               prefixIcon: const Icon(Icons.person_outline),
               suffixIcon: _playerNameHistory.isEmpty
                   ? null
@@ -1278,7 +2282,10 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     return Column(
       children: [
         for (final index in _currentCourseIndexes()) ...[
-          _buildHoleCard(index),
+          KeyedSubtree(
+            key: _holeKeys[index],
+            child: _buildHoleCard(index),
+          ),
           const SizedBox(height: 8),
         ],
       ],
@@ -1288,31 +2295,38 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   Widget _buildHoleCard(int index) {
     final hole = _holes[index];
     final info = _courseInfo(hole.course);
+    final focused = index == _focusedHoleIndex;
+    final completed = _holeScoresComplete(index);
+    final headerColor = completed ? const Color(0xFFE4E8E3) : info.color;
+    final headerTextColor = completed ? const Color(0xFF58645E) : info.textColor;
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE0E6DE)),
+        border: Border.all(
+          color: focused ? const Color(0xFF16866A) : const Color(0xFFE0E6DE),
+          width: focused ? 2 : 1,
+        ),
       ),
       child: Column(
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: info.color,
+              color: headerColor,
               borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
               border: Border.all(color: const Color(0x1F000000)),
             ),
             child: Row(
               children: [
                 Expanded(
-                  child: _buildHoleLabel(index, info),
+                  child: _buildHoleLabel(index, headerTextColor),
                 ),
                 const SizedBox(width: 8),
                 _compactNumberField(hole.distanceController, '거리', 'm'),
                 const SizedBox(width: 8),
-                _buildParPicker(index, info),
+                _buildParPicker(index, headerTextColor),
               ],
             ),
           ),
@@ -1322,7 +2336,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (var player = 0; player < _playerCount; player++)
+                for (final player in _activePlayerIndexes())
                   _playerScoreField(index, player),
               ],
             ),
@@ -1332,14 +2346,14 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
-  Widget _buildHoleLabel(int index, CourseInfo info) {
+  Widget _buildHoleLabel(int index, Color textColor) {
     final hole = _holes[index];
     return Text(
       '${hole.course}코스 ${hole.hole}홀',
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: TextStyle(
-        color: info.textColor,
+        color: textColor,
         fontSize: 17,
         fontWeight: FontWeight.w900,
       ),
@@ -1360,15 +2374,19 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
     );
   }
 
-  Widget _buildParPicker(int index, CourseInfo info) {
+  Widget _buildParPicker(int index, Color textColor) {
     return SizedBox(
-      width: 58,
+      width: 66,
       child: DropdownButton<int>(
         value: _holes[index].par,
         isExpanded: true,
         underline: const SizedBox.shrink(),
-        style: TextStyle(color: info.textColor, fontWeight: FontWeight.w800),
-        iconEnabledColor: info.textColor,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 14,
+          fontWeight: FontWeight.w800,
+        ),
+        iconEnabledColor: textColor,
         items: const [
           DropdownMenuItem(value: 3, child: Text('P3')),
           DropdownMenuItem(value: 4, child: Text('P4')),
@@ -1414,26 +2432,81 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
   }
 
   Widget _playerScoreField(int holeIndex, int playerIndex) {
-    return SizedBox(
-      width: 96,
-      child: TextField(
-        controller: _holes[holeIndex].scoreControllers[playerIndex],
-        keyboardType: TextInputType.number,
-        textAlign: TextAlign.center,
-        decoration: InputDecoration(
-          labelText: _playerName(playerIndex),
-          suffixText: '타',
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 8,
-            vertical: 10,
-          ),
-        ),
-        onChanged: (_) {
-          setState(() {});
-          _saveDraft();
-        },
+    final controller = _holes[holeIndex].scoreControllers[playerIndex];
+    final scoreText = controller.text.trim().isEmpty ? '3' : controller.text.trim();
+
+    return Container(
+      width: 156,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FAF6),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFDCE6D9)),
       ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _playerName(playerIndex),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              _scoreStepButton(
+                icon: Icons.remove,
+                label: '타수 감소',
+                onPressed: () => _changeScore(holeIndex, playerIndex, -1),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: FilledButton.tonal(
+                    onPressed: () => _setScore(holeIndex, playerIndex, 3),
+                    style: FilledButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(44, 42),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      '$scoreText타',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              _scoreStepButton(
+                icon: Icons.add,
+                label: '타수 증가',
+                onPressed: () => _changeScore(holeIndex, playerIndex, 1),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _scoreStepButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton.filledTonal(
+      tooltip: label,
+      onPressed: onPressed,
+      style: IconButton.styleFrom(
+        minimumSize: const Size(42, 42),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      icon: Icon(icon),
     );
   }
 
@@ -1460,6 +2533,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
 
   Widget _buildTotals({required bool currentOnly}) {
     final indexes = _currentCourseIndexes();
+    final activePlayers = _activePlayerIndexes();
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1479,12 +2553,12 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
             ),
           ),
           const SizedBox(height: 6),
-          for (var index = 0; index < _playerCount; index++) ...[
+          for (var item = 0; item < activePlayers.length; item++) ...[
             Text(
               _playerSummaryLine(
-                index,
+                activePlayers[item],
                 indexes: indexes,
-                total: _currentScoreTotal(index),
+                total: _currentScoreTotal(activePlayers[item]),
               ),
               style: const TextStyle(
                 color: Color(0xFF173F35),
@@ -1492,7 +2566,7 @@ class _ScoreCardPageState extends State<ScoreCardPage> {
                 fontWeight: FontWeight.w800,
               ),
             ),
-            if (index < _playerCount - 1) const SizedBox(height: 4),
+            if (item < activePlayers.length - 1) const SizedBox(height: 4),
           ],
         ],
       ),
@@ -1535,7 +2609,10 @@ class SavedRoundsPage extends StatelessWidget {
     final buffer = StringBuffer()
       ..writeln('[파크골프 스코어카드]')
       ..writeln(round['courseName'] as String? ?? round['place'] as String? ?? '경기장 미입력')
-      ..writeln(round['date'] as String? ?? '')
+      ..writeln(
+        '${round['date'] as String? ?? ''} ${round['startTime'] as String? ?? ''}'
+            .trim(),
+      )
       ..writeln('총 걸음수 : ${round['steps'] ?? ''}')
       ..writeln('파 ${round['totalPar'] ?? 0}');
     for (var index = 0; index < players.length && index < totals.length; index++) {
@@ -1590,7 +2667,7 @@ class SavedRoundsPage extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${round['date'] as String? ?? ''} · ${round['status'] as String? ?? '저장'}',
+                          '${round['date'] as String? ?? ''} ${round['startTime'] as String? ?? ''} · ${round['status'] as String? ?? '저장'}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                         if ((round['steps'] as String? ?? '').trim().isNotEmpty) ...[
@@ -1634,11 +2711,13 @@ class SavedRoundsPage extends StatelessWidget {
 class _GolfCoursePickerPageState extends State<GolfCoursePickerPage> {
   final TextEditingController _searchController = TextEditingController();
   late List<ParkGolfCourse> _courses;
+  String? _selectedCourseId;
 
   @override
   void initState() {
     super.initState();
     _courses = widget.courses;
+    _selectedCourseId = widget.selectedCourseId;
   }
 
   @override
@@ -1720,7 +2799,7 @@ class _GolfCoursePickerPageState extends State<GolfCoursePickerPage> {
                   TextButton.icon(
                     onPressed: _openAddCoursePage,
                     icon: const Icon(Icons.add),
-                    label: const Text('없는 구장 등록'),
+                    label: const Text('없는 골프장 등록'),
                   ),
                 ],
               ),
@@ -1732,7 +2811,7 @@ class _GolfCoursePickerPageState extends State<GolfCoursePickerPage> {
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
                   final course = courses[index];
-                  final selected = course.id == widget.selectedCourseId;
+                  final selected = course.id == _selectedCourseId;
                   return Container(
                     decoration: BoxDecoration(
                       color: Colors.white,
@@ -1762,10 +2841,35 @@ class _GolfCoursePickerPageState extends State<GolfCoursePickerPage> {
                         onPressed: () => _openMap(course),
                         icon: const Icon(Icons.map_outlined),
                       ),
-                      onTap: () => Navigator.of(context).pop(course),
+                      onTap: () {
+                        setState(() {
+                          _selectedCourseId = course.id;
+                        });
+                      },
                     ),
                   );
                 },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: FilledButton.icon(
+                onPressed: _selectedCourseId == null
+                    ? null
+                    : () {
+                        final selectedCourse = _courses.firstWhere(
+                          (course) => course.id == _selectedCourseId,
+                        );
+                        Navigator.of(context).pop(selectedCourse);
+                      },
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: const Icon(Icons.sports_golf),
+                label: const Text('경기장으로 선택'),
               ),
             ),
           ],
@@ -1835,7 +2939,7 @@ class _AddGolfCoursePageState extends State<AddGolfCoursePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('없는 구장 등록')),
+      appBar: AppBar(title: const Text('없는 골프장 등록')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),

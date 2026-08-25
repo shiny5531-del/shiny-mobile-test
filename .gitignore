@@ -20,3 +20,4 @@ key.properties
 
 server/data/*.json
 cafe24_api/db_config.php
+cafe24_api/admin/admin_config.php

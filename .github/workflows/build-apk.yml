@@ -42,6 +42,10 @@ jobs:
 
       - name: Set Android app name
         run: |
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET" />' \
+            android/app/src/main/AndroidManifest.xml
+          sed -i '/<manifest/a\    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />' \
+            android/app/src/main/AndroidManifest.xml
           sed -i 's/android:label="shiny_mobile_test"/android:label="파크골프 스코어카드"/' \
             android/app/src/main/AndroidManifest.xml
 

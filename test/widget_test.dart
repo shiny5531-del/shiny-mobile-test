@@ -13,7 +13,7 @@ void main() {
     expect(find.text('파크골프 스코어카드'), findsWidgets);
     expect(find.text('경기 설정'), findsOneWidget);
     expect(find.text('날짜'), findsOneWidget);
-    expect(find.text('경기 시작', skipOffstage: false), findsOneWidget);
+    expect(find.text('새 경기 시작', skipOffstage: false), findsOneWidget);
     expect(find.text('A-B 기본'), findsOneWidget);
   });
 }
